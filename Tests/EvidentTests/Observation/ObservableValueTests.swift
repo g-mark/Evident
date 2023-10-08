@@ -145,6 +145,7 @@ final class ObservableValueTests: XCTestCase {
         
         let values = await observer.values
         XCTAssertEqual(values, ["Pat", "Billie"])
+        try await XCTAssertEqualAsync(await data.value, Thing(name: "Billie", number: 1))
     }
     
     func test_observeNonEquatableProperty() async throws {

@@ -31,7 +31,7 @@ import Combine
 /// ```
 public actor ObservableValue<Value> {
     
-    private var value: Value {
+    public private(set) var value: Value {
         didSet { sendNotifications(oldValue, value) }
     }
     
