@@ -11,3 +11,7 @@ Use an [AuthorizationProvider](Docs/AuthorizationProvider.md) to manage the proc
 ## Messaging
 
 Publish & Subscribe using a simple [MessageQueue](Sources/Evident/Messaging/MessageQueue.swift).
+
+## Value Observation
+
+Hold a value that can be observed for changes - in whole or in part - using an [ObserervableValue](Sources/Evident/Observation/ObservableValue.swift) - an alternative to `@Observable`.
