@@ -45,7 +45,7 @@ final class MessageQueueTests: XCTestCase {
         try await Task.sleep(nanoseconds: 5_000)
         queue.dispatch(.two(3))
         
-        try await eventually(timeout: 1) { await receiver.received.count == 2 }
+        try await eventually { await receiver.received.count == 2 }
         
         // then
         let received = await receiver.received
@@ -69,8 +69,8 @@ final class MessageQueueTests: XCTestCase {
         
         // when
         queue.dispatch(.one)
-        try await eventually(timeout: 1) { await receiver1.received.count == 1 }
-        try await eventually(timeout: 1) { await receiver2.received.count == 1 }
+        try await eventually { await receiver1.received.count == 1 }
+        try await eventually { await receiver2.received.count == 1 }
         
         // then
         var received1 = await receiver1.received
@@ -80,10 +80,10 @@ final class MessageQueueTests: XCTestCase {
         
         // when
         cancellable1.cancel()
-        try await eventually(timeout: 1) { await queue.handlerCount() == 1 }
+        try await eventually { await queue.handlerCount() == 1 }
         
         queue.dispatch(.two(3))
-        try await eventually(timeout: 1) { await receiver2.received.count == 2 }
+        try await eventually { await receiver2.received.count == 2 }
         
         // then
         received1 = await receiver1.received
@@ -108,7 +108,7 @@ final class MessageQueueTests: XCTestCase {
         try await Task.sleep(nanoseconds: 5_000)
         queue.dispatch(.two(3))
         
-        try await eventually(timeout: 1) { await receiver.received.count == 2 }
+        try await eventually { await receiver.received.count == 2 }
         
         // then
         let received = await receiver.received
@@ -129,7 +129,7 @@ final class MessageQueueTests: XCTestCase {
         
         // when
         queue?.dispatch(.one)
-        try await eventually(timeout: 1) { await receiver.received.count == 1 }
+        try await eventually { await receiver.received.count == 1 }
         
         let task = Task.detached { [weak queue] in
             queue?.dispatch(.two(3))
