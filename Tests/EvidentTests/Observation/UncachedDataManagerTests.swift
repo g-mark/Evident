@@ -30,7 +30,7 @@ private actor MyDataManager {
     // MARK: - Public API
     
     /// Observable `MyData` value
-    let value: ManagedValue<MyData>
+    let myData: ManagedValue<MyData>
     
     func updateName(value: String) async throws {
         // 1. (todo) apply extra business logic (validation, etc.)
@@ -53,7 +53,7 @@ private actor MyDataManager {
     private let setter: ManagedValue<MyData>.Setter
     
     init() {
-        (value, setter) = ManagedValue.create(
+        (myData, setter) = ManagedValue.create(
             defaultValue: MyData(name: "", number: 0)
         )
     }
@@ -86,7 +86,7 @@ final class UncachedDataManagerTests: XCTestCase {
         let observer = Observer<String>()
         
         // when
-        await manager.value.observe(\.name) { name in
+        await manager.myData.observe(\.name) { name in
             await observer.collect(name)
         }.store(in: &cancellables)
         
@@ -102,7 +102,7 @@ final class UncachedDataManagerTests: XCTestCase {
         name = try await eventually { await observer.values.first }
         XCTAssertEqual(name, "pat")
         
-        let myData = await manager.value.value
+        let myData = await manager.myData.value
         XCTAssertEqual(myData, MyData(name: "pat", number: 0))
     }
 }
