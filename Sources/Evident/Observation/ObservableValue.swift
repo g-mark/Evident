@@ -68,8 +68,8 @@ public actor ObservableValue<Value> {
     /// - Returns: An `AnyCancellable` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
     ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
-    public func observe(handler: @escaping Handler<Value>) async -> AnyCancellable {
-        addHandler(for: \.self, isDifferent: { _, _ in true }, handler)
+    public nonisolated func observe(handler: @escaping Handler<Value>) -> AnyCancellable {
+        AnyCancellable(Registration(self, for: \.self, isDifferent: { _, _ in true }, handler))
     }
     
     /// Observe the (`Equatable`) value using a closure.
@@ -89,8 +89,8 @@ public actor ObservableValue<Value> {
     /// - Returns: An `AnyCancellable` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
     ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
-    public func observe(handler: @escaping Handler<Value>) async -> AnyCancellable where Value: Equatable {
-        addHandler(for: \.self, isDifferent: { a, b in a != b }, handler)
+    public nonisolated func observe(handler: @escaping Handler<Value>) -> AnyCancellable where Value: Equatable {
+        AnyCancellable(Registration(self, for: \.self, isDifferent: { a, b in a != b }, handler))
     }
     
     /// Observe a non-`Equatable` part of the value using a closure.
@@ -116,8 +116,8 @@ public actor ObservableValue<Value> {
     /// - Returns: An `AnyCancellable` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
     ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
-    public func observe<T>(_ keyPath: KeyPath<Value, T>, handler: @escaping Handler<T>) async -> AnyCancellable {
-        addHandler(for: keyPath, isDifferent: { _, _ in true }, handler)
+    public nonisolated func observe<T>(_ keyPath: KeyPath<Value, T>, handler: @escaping Handler<T>) -> AnyCancellable {
+        AnyCancellable(Registration(self, for: keyPath, isDifferent: { _, _ in true }, handler))
     }
     
     /// Observe an `Equatable` part of the value using a closure.
@@ -142,8 +142,8 @@ public actor ObservableValue<Value> {
     /// - Returns: An `AnyCancellable` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
     ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
-    public func observe<T: Equatable>(_ keyPath: KeyPath<Value, T>, handler: @escaping Handler<T>) async -> AnyCancellable {
-        addHandler(for: keyPath, isDifferent: { a, b in a != b }, handler)
+    public nonisolated func observe<T: Equatable>(_ keyPath: KeyPath<Value, T>, handler: @escaping Handler<T>) -> AnyCancellable {
+        AnyCancellable(Registration(self, for: keyPath, isDifferent: { a, b in a != b }, handler))
     }
     
     // MARK: - Implementation details
@@ -176,27 +176,42 @@ public actor ObservableValue<Value> {
         }
     }
     
+    /// Helper to allow for `nonisolated` value observations
+    private struct Registration<T>: Cancellable {
+        private let _cancel: () -> Void
+        
+        init(
+            _ observable: ObservableValue<Value>,
+            for keyPath: KeyPath<Value, T>,
+            isDifferent: @escaping (T, T) -> Bool,
+            _ handler: @escaping Handler<T>
+        ) {
+            let id = UUID()
+            Task.detached {
+                await observable.addHandler(id: id, for: keyPath, isDifferent: isDifferent, handler)
+            }
+            _cancel = { Task.detached { await observable.release(id, at: keyPath) } }
+        }
+        
+        func cancel() { _cancel() }
+    }
+    
     /// Add a single observation for the specified `keyPath`.
     ///
     /// Calls the `handler` with the current value.
     ///
     /// - Returns: An `AnyCancellable` object for managing the observation.
     private func addHandler<T>(
+        id: UUID,
         for keyPath: KeyPath<Value, T>,
         isDifferent: @escaping (T, T) -> Bool,
         _ handler: @escaping Handler<T>
-    ) -> AnyCancellable {
+    ) {
         var observations = (keyedObservations[keyPath] as? KeyObservations<T>) ?? KeyObservations(keyPath, isDifferent)
-        let id = UUID()
         observations.handlers[id] = handler
         keyedObservations[keyPath] = observations
         Task.detached { [value] in
             await handler(value[keyPath: keyPath])
-        }
-        return AnyCancellable {
-            Task.detached {
-                await self.release(id, at: keyPath)
-            }
         }
     }
     

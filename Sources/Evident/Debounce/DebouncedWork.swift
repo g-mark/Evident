@@ -40,7 +40,7 @@ public actor DebouncedWork {
     
     private func createTimer() {
         timer = Task.detached { [threshold] in
-            try await Task.sleep(nanoseconds: UInt64(threshold * 1_000_000))
+            try await Task.sleep(for: .seconds(threshold))
             await self.flushPendingWork()
         }
     }

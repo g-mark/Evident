@@ -35,7 +35,7 @@ final class ObservableValueTests: XCTestCase {
         let observer = Observer<Thing>()
         
         // when (set up observation)
-        cancellable = await data.observe { value in
+        cancellable = data.observe { value in
             await observer.collect(value)
         }
         
@@ -46,16 +46,17 @@ final class ObservableValueTests: XCTestCase {
         // when
         await data.set(\.name, value: "Pat") // update w/same value - no notification
         await data.set(\.name, value: "Billie") // update w/new value - notification
+        try await eventually { await observer.values.last?.name == "Billie" }
+        
         await data.set(\.number, value: 42) // update w/same value - no notification
         await data.set(\.number, value: 37) // update w/new value - notification
+        try await eventually { await observer.values.last?.number == 37 }
         
         await data.set(value: Thing(name: "Billie", number: 37)) // update w/same value - no notification
         await data.set(value: Thing(name: "Billie", number: 1)) // update w/different value - no notification
+        try await eventually { await observer.values.last?.number == 1 }
         
         // then (should receive updated value)
-        try await eventually { await observer.values.count == 4 }
-        try await Task.sleep(for: .milliseconds(10))
-        
         let values = await observer.values
         XCTAssertEqual(
             values,
@@ -77,7 +78,7 @@ final class ObservableValueTests: XCTestCase {
         let observer = Observer<Thing>()
         
         // when (set up observation)
-        cancellable = await data.observe { value in
+        cancellable = data.observe { value in
             await observer.collect(value)
         }
         
@@ -88,17 +89,20 @@ final class ObservableValueTests: XCTestCase {
         
         // when
         await data.set(\.name, value: "Pat")
+        try await eventually { await observer.values.count == 2 }
         await data.set(\.name, value: "Billie")
+        try await eventually { await observer.values.count == 3 }
         await data.set(\.number, value: 42)
+        try await eventually { await observer.values.count == 4 }
         await data.set(\.number, value: 37)
+        try await eventually { await observer.values.count == 5 }
         
         await data.set(value: Thing(name: "Billie", number: 37))
+        try await eventually { await observer.values.count == 6 }
         await data.set(value: Thing(name: "Billie", number: 1))
+        try await eventually { await observer.values.count == 7 }
         
         // then (should receive updated value)
-        try await eventually { await observer.values.count == 7 }
-        try await Task.sleep(for: .milliseconds(10))
-        
         let values = await observer.values
         let expected = [
             Thing(name: "Pat", number: 42),
@@ -125,7 +129,7 @@ final class ObservableValueTests: XCTestCase {
         let observer = Observer<String>()
         
         // when (set up observation)
-        cancellable = await data.observe(\.name) { value in
+        cancellable = data.observe(\.name) { value in
             await observer.collect(value)
         }
         
@@ -164,7 +168,7 @@ final class ObservableValueTests: XCTestCase {
         let observer = Observer<String>()
         
         // when (set up observation)
-        cancellable = await data.observe(\.name) { value in
+        cancellable = data.observe(\.name) { value in
             await observer.collect(value.string)
         }
         
@@ -191,20 +195,28 @@ final class ObservableValueTests: XCTestCase {
         let data = ObservableValue(initialValue: "A")
         let observer1 = Observer<String>()
         let observer2 = Observer<String>()
+        let observer3 = Observer<String>()
         
         // when (set up observation)
-        cancellable = await data.observe { value in
+        cancellable = data.observe { value in
             await observer1.collect(value)
         }
-        let cancellable2 = await data.observe { value in
+        let cancellable2 = data.observe { value in
             await observer2.collect(value)
+        }
+        
+        // expected to immediately cancel the observation due to the cancellable being discarded via anonymous var
+        let _ = data.observe { value in
+            await observer3.collect(value)
         }
         
         // then (should receive initial value)
         let initialValue1 = try await eventually { await observer1.values.first }
         let initialValue2 = try await eventually { await observer2.values.first }
+        let initialValue3 = try await eventually { await observer3.values.first }
         XCTAssertEqual(initialValue1, "A")
         XCTAssertEqual(initialValue2, "A")
+        XCTAssertEqual(initialValue3, "A")
         
         // when
         await data.set(value: "A") // update w/same value - no notification
@@ -231,8 +243,10 @@ final class ObservableValueTests: XCTestCase {
         // then
         values1 = await observer1.values
         values2 = await observer2.values
+        let values3 = await observer3.values
         XCTAssertEqual(values1, ["A", "B"])
         XCTAssertEqual(values2, ["A", "B", "C"])
+        XCTAssertEqual(values3, ["A"])
         
         // not strictly needed, but silences "unused" warning:
         cancellable2.cancel()
@@ -244,7 +258,7 @@ final class ObservableValueTests: XCTestCase {
         let observer = Observer<Int>()
         
         // when (set up observation)
-        cancellable = await data.observe { value in
+        cancellable = data.observe { value in
             await observer.collect(value)
         }
         

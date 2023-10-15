@@ -10,7 +10,7 @@ import Combine
 
 /// Read-only, optionally cached observable value, with controlled mutability via special "setter" object.
 ///
-/// Initialization from cache / defaultValue is lazy, meaning iinitialization occurs when an observation is created.
+/// Initialization from cache / defaultValue is lazy, meaning initialization occurs when an observation is created.
 public actor ManagedValue<Value> {
     
     /// Creates a `ManagedValue` (read-only) instance, and a `ManagedValue.Setter` instance for updating values.
@@ -22,7 +22,85 @@ public actor ManagedValue<Value> {
         return (managedValue, Setter(managedValue))
     }
     
+    public var value: Value {
+        get async {
+            await withCheckedContinuation { continuation in
+                queue { data in
+                    continuation.resume(returning: await data.value)
+                }
+            }
+        }
+    }
+    
+    /// Observe the (non-`Equatable`) value using a closure.
+    ///
+    /// The `handler` will be called with the current value right away.
+    /// The `handler` will be called whenever the value _is set_.
+    ///
+    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    ///            The observation must be cancelled when no longer needed,
+    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    public nonisolated func observe(
+        handler: @escaping @Sendable (Value) async -> Void
+    ) -> AnyCancellable {
+        AnyCancellable(Registration(self) { data in
+            data.observe(handler: handler)
+        })
+    }
+    
+    /// Observe the (`Equatable`) value using a closure.
+    ///
+    /// The `handler` will be called with the current value right away.
+    /// The `handler` will be called whenever the value _changes_.
+    ///
+    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    ///            The observation must be cancelled when no longer needed,
+    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    public nonisolated func observe(
+        handler: @escaping @Sendable (Value) async -> Void
+    ) -> AnyCancellable where Value: Equatable {
+        AnyCancellable(Registration(self) { data in
+            data.observe(handler: handler)
+        })
+    }
+    
+    /// Observe a non-`Equatable` part of the value using a closure.
+    ///
+    /// The `handler` will be called with the current property value right away.
+    /// The `handler` will be called whenever the **value or the property** _is set_.
+    ///
+    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    ///            The observation must be cancelled when no longer needed,
+    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    public nonisolated func observe<T>(
+        _ keyPath: KeyPath<Value, T>,
+        handler: @escaping @Sendable (T) async -> Void
+    ) -> AnyCancellable {
+        AnyCancellable(Registration(self) { data in
+            data.observe(keyPath, handler: handler)
+        })
+    }
+    
+    /// Observe an `Equatable` part of the value using a closure.
+    ///
+    /// The `handler` will be called with the current property value right away.
+    /// The `handler` will be called whenever the property value _changes_.
+    ///
+    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    ///            The observation must be cancelled when no longer needed,
+    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    public nonisolated func observe<T: Equatable>(
+        _ keyPath: KeyPath<Value, T>,
+        handler: @escaping @Sendable (T) async -> Void
+    ) -> AnyCancellable {
+        AnyCancellable(Registration(self) { data in
+            data.observe(keyPath, handler: handler)
+        })
+    }
+    
     /// Provides write access to the `ManagedValue`.
+    ///
+    /// Only available when instantiating a `ManagedValue` through the static `create` function.
     public actor Setter {
         
         /// Set the value.
@@ -35,7 +113,7 @@ public actor ManagedValue<Value> {
             await managedValue.set(keyPath, value: value)
         }
         
-        /// End _all_ observations, resturn to an uninitialized state.
+        /// End _all_ observations; return to an uninitialized state.
         public func detach() async {
             await managedValue.detach()
         }
@@ -44,54 +122,6 @@ public actor ManagedValue<Value> {
         
         fileprivate init(_ managedValue: ManagedValue) {
             self.managedValue = managedValue
-        }
-    }
-    
-    public typealias Handler<T> = @Sendable (T) async -> Void
-    
-    public var value: Value {
-        get async {
-            await withCheckedContinuation { continuation in
-                queue { data in
-                    continuation.resume(returning: await data.value)
-                }
-            }
-        }
-    }
-    
-    public func observe(handler: @escaping Handler<Value>) async -> AnyCancellable {
-        await withCheckedContinuation { continuation in
-            queue { data in
-                let cancellable = await data.observe(handler: handler)
-                continuation.resume(returning: cancellable)
-            }
-        }
-    }
-    
-    public func observe(handler: @escaping Handler<Value>) async -> AnyCancellable where Value: Equatable {
-        await withCheckedContinuation { continuation in
-            queue { data in
-                let cancellable = await data.observe(handler: handler)
-                continuation.resume(returning: cancellable)
-            }
-        }
-    }
-    
-    public func observe<T>(_ keyPath: KeyPath<Value, T>, handler: @escaping Handler<T>) async -> AnyCancellable {
-        await withCheckedContinuation { continuation in
-            queue { data in
-                let cancellable = await data.observe(keyPath, handler: handler)
-                continuation.resume(returning: cancellable)
-            }
-        }
-    }
-    
-    public func observe<T: Equatable>(_ keyPath: KeyPath<Value, T>, handler: @escaping Handler<T>) async -> AnyCancellable {
-        await withCheckedContinuation { continuation in
-            queue { data in
-                let cancellable = await data.observe(keyPath, handler: handler)
-                continuation.resume(returning: cancellable)
-            }
         }
     }
     
@@ -107,6 +137,22 @@ public actor ManagedValue<Value> {
         case uninitialized
         case initializing([Operation])
         case initialized(ObservableValue<Value>, AnyCancellable?)
+    }
+    
+    /// Helper to allow for `nonisolated` value observations
+    private final class Registration: Cancellable {
+        var cancellable: AnyCancellable?
+        var _cancel: (() -> Void)?
+        func cancel() { _cancel?() }
+        
+        init(_ managed: ManagedValue<Value>, _ op: @escaping (ObservableValue<Value>) -> AnyCancellable) {
+            _cancel = { self.cancellable?.cancel() }
+            Task.detached {
+                await managed.queue { data in
+                    self.cancellable = op(data)
+                }
+            }
+        }
     }
     
     private init(cache: (any SingleValueCache<Value>)?, defaultValue: @escaping @autoclosure @Sendable () -> Value) {
@@ -146,7 +192,7 @@ public actor ManagedValue<Value> {
         }
     }
     
-    /// End _all_ observations, resturn to an uninitialized state.
+    /// End _all_ observations; return to an uninitialized state.
     private func detach() async {
         let oldState = state
         state = .uninitialized
@@ -186,7 +232,6 @@ public actor ManagedValue<Value> {
             else {
                 await self.handleInitialValue(self.defaultValue())
             }
-            // TODO: revalidate
         }
     }
     
@@ -194,7 +239,7 @@ public actor ManagedValue<Value> {
         let data = ObservableValue<Value>(initialValue: value)
         var cancellable: AnyCancellable?
         if cache != nil {
-            cancellable = await data.observe { [weak self] value in
+            cancellable = data.observe { [weak self] value in
                 await self?.cache?.store(value)
             }
         }

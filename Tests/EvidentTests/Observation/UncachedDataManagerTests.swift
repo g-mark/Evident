@@ -86,7 +86,7 @@ final class UncachedDataManagerTests: XCTestCase {
         let observer = Observer<String>()
         
         // when
-        await manager.myData.observe(\.name) { name in
+        manager.myData.observe(\.name) { name in
             await observer.collect(name)
         }.store(in: &cancellables)
         

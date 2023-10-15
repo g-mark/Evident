@@ -63,7 +63,7 @@ extension MyDataManager {
     static let shared = MyDataManager()
 }
 
-let cancellable = await MyDataManager.shared.myData.observe(\.name) { name in
+let cancellable = MyDataManager.shared.myData.observe(\.name) { name in
     print("Name is now: \(name)")
 }
 

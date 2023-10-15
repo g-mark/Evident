@@ -42,7 +42,7 @@ final class UncachedManagedValueTests: XCTestCase {
         let observer = Observer<String>()
         
         // when
-        await managedValue.observe(\.name) { name in
+        managedValue.observe(\.name) { name in
             await observer.collect(name)
         }.store(in: &cancellables)
         
