@@ -16,16 +16,16 @@ public actor DebouncedWork {
     }
     
     public func enqueue(_ work: @escaping Work) async {
-        timer?.invalidate()
+        timer?.cancel()
         timer = nil
         timedWork = work
-        timer = await createTimer().timer
+        createTimer()
     }
     
     public func flushPendingWork() async {
         guard let timedWork else { return }
         
-        timer?.invalidate()
+        timer?.cancel()
         timer = nil
         
         self.timedWork = nil
@@ -35,17 +35,13 @@ public actor DebouncedWork {
     // MARK: - Implementation details
     
     private let threshold: TimeInterval
-    private var timer: Timer?
+    private var timer: Task<Void, Error>?
     private var timedWork: Work?
     
-    private struct WrappedTimer { let timer: Timer }
-    
-    @MainActor
-    private func createTimer() -> WrappedTimer {
-        WrappedTimer(
-            timer: Timer.scheduledTimer(withTimeInterval: threshold, repeats: false) { _ in
-                Task.detached { await self.flushPendingWork() }
-            }
-        )
+    private func createTimer() {
+        timer = Task.detached { [threshold] in
+            try await Task.sleep(nanoseconds: UInt64(threshold * 1_000_000))
+            await self.flushPendingWork()
+        }
     }
 }
