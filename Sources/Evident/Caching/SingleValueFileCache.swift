@@ -52,6 +52,10 @@ public actor SingleValueFileCache<Value: Codable>: SingleValueCache {
         await work.flushPendingWork()
     }
     
+    public func clear() async {
+        await work.cancel()
+    }
+    
     private func initialize() -> State {
         let fileManager = FileManager.default
         let url = try? fileManager.url(for: .cachesDirectory, in: .localDomainMask, appropriateFor: nil, create: true)

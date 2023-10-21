@@ -13,4 +13,5 @@ public protocol SingleValueCache<Value>: Actor {
     func retrieve() async -> (value: Value, isStale: Bool)?
     func store(_ value: Value) async
     func flushPendingWork() async
+    func clear() async
 }

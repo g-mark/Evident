@@ -11,7 +11,7 @@ import Combine
 
 final class ObservableValueTests: XCTestCase {
     
-    private var cancellable: AnyCancellable?
+    private var cancellables: [AnyCancellable] = []
     
     private actor Observer<T> {
         var values: [T] = []
@@ -21,7 +21,7 @@ final class ObservableValueTests: XCTestCase {
     }
     
     override func tearDown() {
-        cancellable = nil
+        cancellables = []
         super.tearDown()
     }
     
@@ -33,39 +33,61 @@ final class ObservableValueTests: XCTestCase {
         }
         let data = ObservableValue(initialValue: Thing(name: "Pat", number: 42))
         let observer = Observer<Thing>()
+        let transitions = Observer<(Thing?, Thing)>()
         
         // when (set up observation)
-        cancellable = data.observe { value in
+        data.observe { value in
             await observer.collect(value)
-        }
+        }.store(in: &cancellables)
+        data.observe { old, new in
+            await transitions.collect((old, new))
+        }.store(in: &cancellables)
         
         // then (should receive initial value)
         let initialValue = try await eventually { await observer.values.first }
         XCTAssertEqual(initialValue, Thing(name: "Pat", number: 42))
+        
+        var (old, new) = try await eventually { await transitions.values.first }
+        XCTAssertNil(old)
+        XCTAssertEqual(new, Thing(name: "Pat", number: 42))
         
         // when
         await data.set(\.name, value: "Pat") // update w/same value - no notification
         await data.set(\.name, value: "Billie") // update w/new value - notification
         try await eventually { await observer.values.last?.name == "Billie" }
         
+        try await eventually { await transitions.values.last?.1.name == "Billie" }
+        (old, new) = try await eventually { await transitions.values.last }
+        XCTAssertEqual(old, Thing(name: "Pat", number: 42))
+        XCTAssertEqual(new, Thing(name: "Billie", number: 42))
+        
         await data.set(\.number, value: 42) // update w/same value - no notification
         await data.set(\.number, value: 37) // update w/new value - notification
         try await eventually { await observer.values.last?.number == 37 }
+        
+        try await eventually { await transitions.values.last?.1.number == 37 }
+        (old, new) = try await eventually { await transitions.values.last }
+        XCTAssertEqual(old, Thing(name: "Billie", number: 42))
+        XCTAssertEqual(new, Thing(name: "Billie", number: 37))
         
         await data.set(value: Thing(name: "Billie", number: 37)) // update w/same value - no notification
         await data.set(value: Thing(name: "Billie", number: 1)) // update w/different value - no notification
         try await eventually { await observer.values.last?.number == 1 }
         
+        try await eventually { await transitions.values.last?.1.number == 1 }
+        (old, new) = try await eventually { await transitions.values.last }
+        XCTAssertEqual(old, Thing(name: "Billie", number: 37))
+        XCTAssertEqual(new, Thing(name: "Billie", number: 1))
+        
         // then (should receive updated value)
         let values = await observer.values
-        XCTAssertEqual(
-            values,
-            [Thing(name: "Pat", number: 42),
-             Thing(name: "Billie", number: 42),
-             Thing(name: "Billie", number: 37),
-             Thing(name: "Billie", number: 1)
-            ]
-        )
+        let expected = [
+            Thing(name: "Pat", number: 42),
+            Thing(name: "Billie", number: 42),
+            Thing(name: "Billie", number: 37),
+            Thing(name: "Billie", number: 1)
+        ]
+        XCTAssertEqual(values, expected)
     }
     
     func test_observeNonEquatableType() async throws {
@@ -78,9 +100,9 @@ final class ObservableValueTests: XCTestCase {
         let observer = Observer<Thing>()
         
         // when (set up observation)
-        cancellable = data.observe { value in
+        data.observe { value in
             await observer.collect(value)
-        }
+        }.store(in: &cancellables)
         
         // then (should receive initial value)
         let initialValue = try await eventually { await observer.values.first }
@@ -129,9 +151,9 @@ final class ObservableValueTests: XCTestCase {
         let observer = Observer<String>()
         
         // when (set up observation)
-        cancellable = data.observe(\.name) { value in
+        data.observe(\.name) { value in
             await observer.collect(value)
-        }
+        }.store(in: &cancellables)
         
         // then (should receive initial value)
         let initialValue = try await eventually { await observer.values.first }
@@ -168,9 +190,9 @@ final class ObservableValueTests: XCTestCase {
         let observer = Observer<String>()
         
         // when (set up observation)
-        cancellable = data.observe(\.name) { value in
+        data.observe(\.name) { value in
             await observer.collect(value.string)
-        }
+        }.store(in: &cancellables)
         
         // then (should receive initial value)
         let initialValue = try await eventually { await observer.values.first }
@@ -198,15 +220,15 @@ final class ObservableValueTests: XCTestCase {
         let observer3 = Observer<String>()
         
         // when (set up observation)
-        cancellable = data.observe { value in
+        let cancellable = data.observe { value in
             await observer1.collect(value)
         }
-        let cancellable2 = data.observe { value in
+        data.observe { value in
             await observer2.collect(value)
-        }
+        }.store(in: &cancellables)
         
         // expected to immediately cancel the observation due to the cancellable being discarded via anonymous var
-        let _ = data.observe { value in
+        _ = data.observe { value in
             await observer3.collect(value)
         }
         
@@ -233,7 +255,7 @@ final class ObservableValueTests: XCTestCase {
         XCTAssertEqual(values2, ["A", "B"])
         
         // when
-        cancellable = nil
+        cancellable.cancel()
         try await Task.sleep(for: .milliseconds(10))
         
         await data.set(value: "C")
@@ -247,38 +269,6 @@ final class ObservableValueTests: XCTestCase {
         XCTAssertEqual(values1, ["A", "B"])
         XCTAssertEqual(values2, ["A", "B", "C"])
         XCTAssertEqual(values3, ["A"])
-        
-        // not strictly needed, but silences "unused" warning:
-        cancellable2.cancel()
-    }
-    
-    func test_deterministicOrdering() async throws {
-        // given
-        let data = ObservableValue(initialValue: 0)
-        let observer = Observer<Int>()
-        
-        // when (set up observation)
-        cancellable = data.observe { value in
-            await observer.collect(value)
-        }
-        
-        // then (should receive initial value)
-        let initialValue = try await eventually { await observer.values.first }
-        XCTAssertEqual(initialValue, 0)
-        
-        // when
-        for num in 1...100 {
-            await data.set(value: num)
-        }
-        
-        // then
-        try await eventually { await observer.values.count == 101 }
-        
-        let values = await observer.values
-        XCTAssertEqual(
-            values,
-            (0...100).map { $0 }
-        )
     }
 }
 

@@ -8,7 +8,7 @@
 import Foundation
 import Combine
 
-/// Read-only, optionally cached observable value, with controlled mutability via special "setter" object.
+/// Read-only, optionally cached observable value, with controlled mutability via special `Setter` object.
 ///
 /// Initialization from cache / defaultValue is lazy, meaning initialization occurs when an observation is created.
 public actor ManagedValue<Value> {
@@ -32,7 +32,39 @@ public actor ManagedValue<Value> {
         }
     }
     
-    /// Observe the (non-`Equatable`) value using a closure.
+    /// Observe the (non-`Equatable`) value using an async closure that receives the old and new values.
+    ///
+    /// The `handler` will be called with the current value right away (the old value will be `nil`).
+    /// The `handler` will be called whenever the value _is set_.
+    ///
+    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    ///            The observation must be cancelled when no longer needed,
+    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    public nonisolated func observe(
+        handler: @escaping @Sendable (Value?, Value) async -> Void
+    ) -> AnyCancellable {
+        register { data in
+            data.observe(handler: handler)
+        }
+    }
+    
+    /// Observe the (`Equatable`) value using an async closure that receives the old and new values.
+    ///
+    /// The `handler` will be called with the current value right away (the old value will be `nil`).
+    /// The `handler` will be called whenever the value _changes_.
+    ///
+    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    ///            The observation must be cancelled when no longer needed,
+    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    public nonisolated func observe(
+        handler: @escaping @Sendable (Value?, Value) async -> Void
+    ) -> AnyCancellable where Value: Equatable {
+        register { data in
+            data.observe(handler: handler)
+        }
+    }
+    
+    /// Observe the (non-`Equatable`) value using an async closure.
     ///
     /// The `handler` will be called with the current value right away.
     /// The `handler` will be called whenever the value _is set_.
@@ -43,12 +75,12 @@ public actor ManagedValue<Value> {
     public nonisolated func observe(
         handler: @escaping @Sendable (Value) async -> Void
     ) -> AnyCancellable {
-        AnyCancellable(Registration(self) { data in
+        register { data in
             data.observe(handler: handler)
-        })
+        }
     }
     
-    /// Observe the (`Equatable`) value using a closure.
+    /// Observe the (`Equatable`) value using an async closure.
     ///
     /// The `handler` will be called with the current value right away.
     /// The `handler` will be called whenever the value _changes_.
@@ -59,12 +91,12 @@ public actor ManagedValue<Value> {
     public nonisolated func observe(
         handler: @escaping @Sendable (Value) async -> Void
     ) -> AnyCancellable where Value: Equatable {
-        AnyCancellable(Registration(self) { data in
+        register { data in
             data.observe(handler: handler)
-        })
+        }
     }
     
-    /// Observe a non-`Equatable` part of the value using a closure.
+    /// Observe a non-`Equatable` part of the value using an async closure.
     ///
     /// The `handler` will be called with the current property value right away.
     /// The `handler` will be called whenever the **value or the property** _is set_.
@@ -76,12 +108,12 @@ public actor ManagedValue<Value> {
         _ keyPath: KeyPath<Value, T>,
         handler: @escaping @Sendable (T) async -> Void
     ) -> AnyCancellable {
-        AnyCancellable(Registration(self) { data in
+        register { data in
             data.observe(keyPath, handler: handler)
-        })
+        }
     }
     
-    /// Observe an `Equatable` part of the value using a closure.
+    /// Observe an `Equatable` part of the value using an async closure.
     ///
     /// The `handler` will be called with the current property value right away.
     /// The `handler` will be called whenever the property value _changes_.
@@ -93,9 +125,9 @@ public actor ManagedValue<Value> {
         _ keyPath: KeyPath<Value, T>,
         handler: @escaping @Sendable (T) async -> Void
     ) -> AnyCancellable {
-        AnyCancellable(Registration(self) { data in
+        register { data in
             data.observe(keyPath, handler: handler)
-        })
+        }
     }
     
     /// Provides write access to the `ManagedValue`.
@@ -140,31 +172,37 @@ public actor ManagedValue<Value> {
     }
     
     /// Helper to allow for `nonisolated` value observations
-    private final class Registration: Cancellable {
-        var cancellable: AnyCancellable?
-        var _cancel: (() -> Void)?
-        func cancel() { _cancel?() }
+    private struct Registration: Cancellable {
+        private let _cancel: () async -> Void
+        func cancel() { Task.detached { await self._cancel() } }
         
         init(_ managed: ManagedValue<Value>, _ op: @escaping (ObservableValue<Value>) -> AnyCancellable) {
-            _cancel = { self.cancellable?.cancel() }
-            Task.detached {
-                await managed.queue { data in
-                    self.cancellable = op(data)
+            let task = Task.detached {
+                await withCheckedContinuation { continuation in
+                    Task {
+                        await managed.queue { data in
+                            continuation.resume(returning: op(data))
+                        }
+                    }
                 }
             }
+            _cancel = {
+                let cancellable = await task.value
+                cancellable.cancel()
+            }
         }
-    }
-    
-    private init(cache: (any SingleValueCache<Value>)?, defaultValue: @escaping @autoclosure @Sendable () -> Value) {
-        self.cache = cache
-        self.defaultValue = defaultValue
-        state = .uninitialized
     }
     
     private init(cache: (any SingleValueCache<Value>)?, defaultValue: @escaping @Sendable () -> Value) {
         self.cache = cache
         self.defaultValue = defaultValue
         state = .uninitialized
+    }
+    
+    private nonisolated func register(
+        op: @escaping (ObservableValue<Value>) -> AnyCancellable
+    ) -> AnyCancellable {
+        AnyCancellable(Registration(self, op))
     }
     
     /// Set the value.

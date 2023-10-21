@@ -32,6 +32,12 @@ public actor DebouncedWork {
         await timedWork()
     }
     
+    public func cancel() async {
+        timedWork = nil
+        timer?.cancel()
+        timer = nil
+    }
+    
     // MARK: - Implementation details
     
     private let threshold: TimeInterval
