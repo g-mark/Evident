@@ -9,13 +9,15 @@ import Foundation
 
 public actor DebouncedWork {
     
-    public typealias Work = @Sendable () async -> Void
-    
     public init(threshold: TimeInterval) {
         self.threshold = threshold
     }
     
-    public func enqueue(_ work: @escaping Work) async {
+    public func enqueue(_ work: @escaping @Sendable () async -> Void) async {
+        guard self.threshold > 0 else {
+            await work()
+            return
+        }
         timer?.cancel()
         timer = nil
         timedWork = work
@@ -42,7 +44,7 @@ public actor DebouncedWork {
     
     private let threshold: TimeInterval
     private var timer: Task<Void, Error>?
-    private var timedWork: Work?
+    private var timedWork: (@Sendable () async -> Void)?
     
     private func createTimer() {
         timer = Task.detached { [threshold] in
