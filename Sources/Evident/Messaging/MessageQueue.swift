@@ -9,7 +9,7 @@ import Foundation
 import Combine
 
 /// General purpose message queue, supporting cancellable observations.
-public actor MessageQueue<Value> {
+public actor MessageQueue<Value: Sendable> {
     
     public typealias Handler = @Sendable (Value) async -> Void
     
