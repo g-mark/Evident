@@ -146,7 +146,7 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     
     // MARK: - Notifications
     
-    public enum TokenChangeMessage {
+    public enum TokenChangeMessage: Sendable {
         case tokenInvalidated(Error)
         case tokenUpdated(Token)
     }

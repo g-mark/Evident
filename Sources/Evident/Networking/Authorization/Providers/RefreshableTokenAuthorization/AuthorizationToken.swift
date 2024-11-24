@@ -7,7 +7,7 @@
 
 import Foundation
 
-public protocol AuthorizationToken {
+public protocol AuthorizationToken: Sendable {
     
     var authorizationHeaderValue: String { get }
     var isExpired: Bool { get }
