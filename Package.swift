@@ -1,4 +1,4 @@
-// swift-tools-version: 5.7
+// swift-tools-version: 5.8
 
 import PackageDescription
 
@@ -20,9 +20,13 @@ let package = Package(
     targets: [
         .target(
             name: "Evident",
-            dependencies: []),
+            dependencies: [],
+            swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
+        ),
         .testTarget(
             name: "EvidentTests",
-            dependencies: ["Evident"]),
+            dependencies: ["Evident"],
+            swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
+        ),
     ]
 )
