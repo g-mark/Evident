@@ -40,4 +40,5 @@ extension AuthorizationProvider {
     }
 }
 
+/// An error indicating that authorization is not available or has been invalidated.
 public struct NotAuthorized: Error { }

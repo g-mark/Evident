@@ -5,8 +5,7 @@
 //  Created by Steven Grosmark on 10/14/23.
 //
 
-import XCTest
-import Combine
+import Testing
 @testable import Evident
 
 private actor MemoryCache<Value>: SingleValueCache {
@@ -34,77 +33,75 @@ private actor Observer<T> {
 private let defaultVaue = Thing(name: "", number: 0)
 private let initialCacheVaue = Thing(name: "Pat", number: 42)
 
-final class CachedManagedValueTests: XCTestCase {
-    
-    private var cache: MemoryCache<Thing>!
-    private var managedValue: ManagedValue<Thing>!
-    private var setter: ManagedValue<Thing>.Setter!
-    private var cancellables: [AnyCancellable] = []
-    
-    override func setUp() async throws {
-        try await super.setUp()
+@Suite(.serialized)
+struct CachedManagedValueTests {
+
+    private let cache: MemoryCache<Thing>
+    private let managedValue: ManagedValue<Thing>
+    private let setter: ManagedValue<Thing>.Setter
+
+    init() {
         cache = MemoryCache<Thing>(nil)
         (managedValue, setter) = ManagedValue.create(
             cache: cache,
             defaultValue: defaultVaue
         )
     }
-    
-    override func tearDown() async throws {
-        try await super.tearDown()
-        managedValue = nil
-        setter = nil
-        cancellables = []
-        cache = nil
-    }
-    
-    func test_manager_usesDefaultValue() async throws {
+
+    @Test func managerUsesDefaultValue() async throws {
         let observer = Observer<Thing>()
-        
+        var cancellables: [AnyCancellableAsync] = []
+
         // when
         managedValue.observe { thing in
             await observer.collect(thing)
         }
         .store(in: &cancellables)
-        
+
         // then
         let thing = try await eventually { await observer.values.first }
-        XCTAssertEqual(thing, defaultVaue)
+        #expect(thing == defaultVaue)
+        _ = cancellables
     }
-    
-    func test_manager_readsFromCache() async throws {
+
+    @Test func managerReadsFromCache() async throws {
         let observer = Observer<Thing>()
-        
+        var cancellables: [AnyCancellableAsync] = []
+
         // when
         await cache.store(initialCacheVaue)
         managedValue.observe { thing in
             await observer.collect(thing)
         }
         .store(in: &cancellables)
-        
+
         // then
         let thing = try await eventually { await observer.values.first }
-        XCTAssertEqual(thing, initialCacheVaue)
+        #expect(thing == initialCacheVaue)
+        _ = cancellables
     }
-    
-    func test_manager_writesToCache() async throws {
+
+    @Test func managerWritesToCache() async throws {
         let observer = Observer<String>()
-        
+        var cancellables: [AnyCancellableAsync] = []
+
         // when
         managedValue.observe(\.name) { name in
             await observer.collect(name)
         }
         .store(in: &cancellables)
-        
+
         // then
         let name = try await eventually { await observer.values.first }
-        XCTAssertEqual(name, "")
-        
+        #expect(name == "")
+
         // when
         await setter.set(\.name, value: "pat")
-        
+
         // then
-        let cachedValue = try await eventually { await cache.value }
-        XCTAssertEqual(cachedValue, Thing(name: "pat", number: defaultVaue.number))
+        try await eventually {
+            await cache.value == Thing(name: "pat", number: defaultVaue.number)
+        }
+        _ = cancellables
     }
 }

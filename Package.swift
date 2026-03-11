@@ -1,4 +1,4 @@
-// swift-tools-version: 5.7
+// swift-tools-version: 6.1
 
 import PackageDescription
 
@@ -20,9 +20,11 @@ let package = Package(
     targets: [
         .target(
             name: "Evident",
-            dependencies: []),
+            dependencies: [],
+        ),
         .testTarget(
             name: "EvidentTests",
-            dependencies: ["Evident"]),
+            dependencies: ["Evident"],
+        ),
     ]
 )

@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import Combine
 
 /// An `AuthorizationProvider` that manages a refreshable `AuthorizationToken`.
 ///
@@ -45,6 +44,12 @@ import Combine
 public actor RefreshableTokenAuthorization<Token, TokenService>: AuthorizationProvider
 where TokenService: RefreshableTokenService, TokenService.Token == Token {
     
+    /// Creates a refreshable token authorization provider.
+    ///
+    /// The provider starts in an invalid state with no token.
+    /// Use ``setToken(_:)`` or ``refresh(using:)`` to provide an initial token.
+    ///
+    /// - Parameter service: The service used to refresh expired tokens.
     public init(service: TokenService) {
         self.service = service
         self.state = .invalid(NotAuthorized())
@@ -146,14 +151,23 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     
     // MARK: - Notifications
     
-    public enum TokenChangeMessage {
+    /// Messages dispatched when the token state changes.
+    public enum TokenChangeMessage: Sendable {
+        /// The token has been invalidated, with the associated error describing why.
         case tokenInvalidated(Error)
+        /// The token has been updated to a new valid value.
         case tokenUpdated(Token)
     }
-    
+
+    /// Subscribes to token change notifications.
+    ///
+    /// The handler is called whenever the token is updated or invalidated.
+    ///
+    /// - Parameter handler: An async closure called with each ``TokenChangeMessage``.
+    /// - Returns: An ``AnyCancellableAsync`` to manage the observation lifetime.
     public func onTokenChange(
         _ handler: @escaping MessageQueue<TokenChangeMessage>.Handler
-    ) async -> AnyCancellable {
+    ) async -> AnyCancellableAsync {
         await tokenChanges.observe(handler)
     }
     

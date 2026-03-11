@@ -6,12 +6,11 @@
 //
 
 import Foundation
-import Combine
 
 /// Read-only, optionally cached observable value, with controlled mutability via special `Setter` object.
 ///
 /// Initialization from cache / defaultValue is lazy, meaning initialization occurs when an observation is created.
-public actor ManagedValue<Value> {
+public actor ManagedValue<Value: Sendable> {
     
     /// Creates a `ManagedValue` (read-only) instance, and a `ManagedValue.Setter` instance for updating values.
     public static func create(
@@ -22,6 +21,9 @@ public actor ManagedValue<Value> {
         return (managedValue, Setter(managedValue))
     }
     
+    /// The current value.
+    ///
+    /// Accessing this property triggers lazy initialization if the value hasn't been loaded yet.
     public var value: Value {
         get async {
             await withCheckedContinuation { continuation in
@@ -37,12 +39,12 @@ public actor ManagedValue<Value> {
     /// The `handler` will be called with the current value right away (the old value will be `nil`).
     /// The `handler` will be called whenever the value _is set_.
     ///
-    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    /// - Returns: An `AnyCancellableAsync` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
-    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
     public nonisolated func observe(
         handler: @escaping @Sendable (Value?, Value) async -> Void
-    ) -> AnyCancellable {
+    ) -> AnyCancellableAsync {
         register { data in
             data.observe(handler: handler)
         }
@@ -53,12 +55,12 @@ public actor ManagedValue<Value> {
     /// The `handler` will be called with the current value right away (the old value will be `nil`).
     /// The `handler` will be called whenever the value _changes_.
     ///
-    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    /// - Returns: An `AnyCancellableAsync` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
-    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
     public nonisolated func observe(
         handler: @escaping @Sendable (Value?, Value) async -> Void
-    ) -> AnyCancellable where Value: Equatable {
+    ) -> AnyCancellableAsync where Value: Equatable {
         register { data in
             data.observe(handler: handler)
         }
@@ -69,12 +71,12 @@ public actor ManagedValue<Value> {
     /// The `handler` will be called with the current value right away.
     /// The `handler` will be called whenever the value _is set_.
     ///
-    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    /// - Returns: An `AnyCancellableAsync` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
-    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
     public nonisolated func observe(
         handler: @escaping @Sendable (Value) async -> Void
-    ) -> AnyCancellable {
+    ) -> AnyCancellableAsync {
         register { data in
             data.observe(handler: handler)
         }
@@ -85,12 +87,12 @@ public actor ManagedValue<Value> {
     /// The `handler` will be called with the current value right away.
     /// The `handler` will be called whenever the value _changes_.
     ///
-    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    /// - Returns: An `AnyCancellableAsync` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
-    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
+    ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
     public nonisolated func observe(
         handler: @escaping @Sendable (Value) async -> Void
-    ) -> AnyCancellable where Value: Equatable {
+    ) -> AnyCancellableAsync where Value: Equatable {
         register { data in
             data.observe(handler: handler)
         }
@@ -101,13 +103,13 @@ public actor ManagedValue<Value> {
     /// The `handler` will be called with the current property value right away.
     /// The `handler` will be called whenever the **value or the property** _is set_.
     ///
-    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    /// - Returns: An `AnyCancellableAsync` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
-    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
-    public nonisolated func observe<T>(
-        _ keyPath: KeyPath<Value, T>,
+    ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
+    public nonisolated func observe<T: Sendable>(
+        _ keyPath: KeyPath<Value, T> & Sendable,
         handler: @escaping @Sendable (T) async -> Void
-    ) -> AnyCancellable {
+    ) -> AnyCancellableAsync {
         register { data in
             data.observe(keyPath, handler: handler)
         }
@@ -118,13 +120,13 @@ public actor ManagedValue<Value> {
     /// The `handler` will be called with the current property value right away.
     /// The `handler` will be called whenever the property value _changes_.
     ///
-    /// - Returns: An `AnyCancellable` object used to cancel the observation.
+    /// - Returns: An `AnyCancellableAsync` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
-    ///            either implicitly by releasing the `AnyCancellable`, or explicitly by calling   `cancel()` on it.
-    public nonisolated func observe<T: Equatable>(
-        _ keyPath: KeyPath<Value, T>,
+    ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
+    public nonisolated func observe<T: Equatable & Sendable>(
+        _ keyPath: KeyPath<Value, T> & Sendable,
         handler: @escaping @Sendable (T) async -> Void
-    ) -> AnyCancellable {
+    ) -> AnyCancellableAsync {
         register { data in
             data.observe(keyPath, handler: handler)
         }
@@ -141,7 +143,7 @@ public actor ManagedValue<Value> {
         }
         
         /// Set a part of the value.
-        public func set<T>(_ keyPath: WritableKeyPath<Value, T>, value: T) async {
+        public func set<T: Sendable>(_ keyPath: WritableKeyPath<Value, T> & Sendable, value: T) async {
             await managedValue.set(keyPath, value: value)
         }
         
@@ -157,7 +159,7 @@ public actor ManagedValue<Value> {
         }
     }
     
-    // MARK: Implementation details
+    // MARK: - Implementation details
     
     private var state: State
     private let cache: (any SingleValueCache<Value>)?
@@ -168,15 +170,20 @@ public actor ManagedValue<Value> {
     private enum State {
         case uninitialized
         case initializing([Operation])
-        case initialized(ObservableValue<Value>, AnyCancellable?)
+        case initialized(ObservableValue<Value>, AnyCancellableAsync?)
     }
     
     /// Helper to allow for `nonisolated` value observations
     private struct Registration: Cancellable {
-        private let _cancel: () async -> Void
-        func cancel() { Task.detached { await self._cancel() } }
+        private let _cancel: @Sendable () async -> Void
         
-        init(_ managed: ManagedValue<Value>, _ op: @escaping (ObservableValue<Value>) -> AnyCancellable) {
+        func cancel() {
+            Task.detached {
+                await self._cancel()
+            }
+        }
+        
+        init(_ managed: ManagedValue<Value>, _ op: @escaping @Sendable (ObservableValue<Value>) -> AnyCancellableAsync) {
             let task = Task.detached {
                 await withCheckedContinuation { continuation in
                     Task {
@@ -188,7 +195,7 @@ public actor ManagedValue<Value> {
             }
             _cancel = {
                 let cancellable = await task.value
-                cancellable.cancel()
+                await cancellable.cancel()
             }
         }
     }
@@ -200,9 +207,9 @@ public actor ManagedValue<Value> {
     }
     
     private nonisolated func register(
-        op: @escaping (ObservableValue<Value>) -> AnyCancellable
-    ) -> AnyCancellable {
-        AnyCancellable(Registration(self, op))
+        op: @escaping @Sendable (ObservableValue<Value>) -> AnyCancellableAsync
+    ) -> AnyCancellableAsync {
+        AnyCancellableAsync(Registration(self, op))
     }
     
     /// Set the value.
@@ -221,7 +228,7 @@ public actor ManagedValue<Value> {
     }
     
     /// Set a part of the value.
-    private func set<T>(_ keyPath: WritableKeyPath<Value, T>, value: T) async {
+    private func set<T: Sendable>(_ keyPath: WritableKeyPath<Value, T> & Sendable, value: T) async {
         await withCheckedContinuation { continuation in
             queue { data in
                 await data.set(keyPath, value: value)
@@ -275,7 +282,7 @@ public actor ManagedValue<Value> {
     
     private func handleInitialValue(_ value: Value) async {
         let data = ObservableValue<Value>(initialValue: value)
-        var cancellable: AnyCancellable?
+        var cancellable: AnyCancellableAsync?
         if cache != nil {
             cancellable = data.observe { [weak self] value in
                 await self?.cache?.store(value)
