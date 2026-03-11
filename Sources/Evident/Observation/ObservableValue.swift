@@ -31,11 +31,17 @@ import Foundation
 public actor ObservableValue<Value: Sendable> {
     
     public private(set) var value: Value {
-        didSet { sendNotifications(oldValue, value) }
+        didSet {
+            continuation?.yield((oldValue, value))
+        }
     }
     
     public init(initialValue: Value) {
-        value = initialValue
+        self.value = initialValue
+    }
+    
+    deinit {
+        continuation?.finish()
     }
     
     /// Set the value.
@@ -213,7 +219,13 @@ public actor ObservableValue<Value: Sendable> {
     
     // MARK: - Implementation details
     
-    // Observations are grouped by KeyPath for efficiency in calculating & checking values.
+    /// Serial stream for pushing new values through the observable.
+    private var continuation: AsyncStream<(Value, Value)>.Continuation?
+    
+    /// Monitors the stream for new values.
+    private var task: Task<Void, Never>?
+    
+    /// Observations are grouped by KeyPath for efficiency in calculating & checking values.
     private var keyedObservations: [PartialKeyPath<Value>: any Notifiable<Value>] = [:]
     
     private typealias Handler<T> = @Sendable (T?, T) async -> Void
@@ -268,6 +280,19 @@ public actor ObservableValue<Value: Sendable> {
         func cancel() { _cancel() }
     }
     
+    private func initializeStreamIfNeeded() {
+        guard task == nil else { return }
+        
+        let (stream, continuation) = AsyncStream.makeStream(of: (Value, Value).self)
+        
+        self.continuation = continuation
+        self.task = Task {
+            for await (oldValue, value) in stream {
+                await sendNotifications(oldValue, value)
+            }
+        }
+    }
+    
     private nonisolated func register<T: Sendable>(
         _ keyPath: KeyPath<Value, T> & Sendable,
         isDifferent: @escaping @Sendable (T, T) -> Bool,
@@ -289,6 +314,7 @@ public actor ObservableValue<Value: Sendable> {
         isDifferent: @escaping @Sendable (T, T) -> Bool,
         _ handler: @escaping Handler<T>
     ) {
+        initializeStreamIfNeeded()
         var observations = (keyedObservations[keyPath] as? KeyObservations<T>) ?? KeyObservations(keyPath, isDifferent)
         observations.handlers[id] = handler
         keyedObservations[keyPath] = observations
@@ -312,12 +338,9 @@ public actor ObservableValue<Value: Sendable> {
     }
     
     /// The stored value has changed, send notifications to all affected observations.
-    private func sendNotifications(_ oldValue: Value, _ newValue: Value) {
-        let observations = keyedObservations.values.map { $0 }
-        Task {
-            for keyObservations in observations {
-                await keyObservations.notify(oldValue, newValue)
-            }
+    private func sendNotifications(_ oldValue: Value, _ newValue: Value) async {
+        for keyObservations in keyedObservations.values {
+            await keyObservations.notify(oldValue, newValue)
         }
     }
 }

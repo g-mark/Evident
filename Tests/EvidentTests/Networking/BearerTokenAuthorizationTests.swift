@@ -7,22 +7,21 @@
 
 import Foundation
 import Evident
-import XCTest
+import Testing
 
-final class BearerTokenAuthorizationTests: XCTestCase {
-    
-    func test_bearerAuthorization() async throws {
+struct BearerTokenAuthorizationTests {
+
+    @Test func bearerAuthorization() async throws {
         // given
-        let url = try XCTUnwrap(URL(string: "https://test.net"))
+        let url = try #require(URL(string: "https://test.net"))
         let request = URLRequest(url: url)
         let authProvider = BearerTokenAuthorization(token: "TOK")
-        
+
         // when
         let workRequest = try await authProvider.authorize(request)
-        
+
         // then
-        XCTAssertNotEqual(workRequest, request)
-        
-        XCTAssertEqual("Bearer TOK", workRequest.authorizationHeaderValue)
+        #expect(workRequest != request)
+        #expect("Bearer TOK" == workRequest.authorizationHeaderValue)
     }
 }
