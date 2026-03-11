@@ -6,7 +6,6 @@
 //
 
 import XCTest
-import Combine
 @testable import Evident
 
 private actor MemoryCache<Value>: SingleValueCache {
@@ -39,7 +38,7 @@ final class CachedManagedValueTests: XCTestCase {
     private var cache: MemoryCache<Thing>!
     private var managedValue: ManagedValue<Thing>!
     private var setter: ManagedValue<Thing>.Setter!
-    private var cancellables: [AnyCancellable] = []
+    private var cancellables: [AnyCancellableAsync] = []
     
     override func setUp() async throws {
         try await super.setUp()

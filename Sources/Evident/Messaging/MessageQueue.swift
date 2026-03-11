@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import Combine
 
 /// General purpose message queue, supporting cancellable observations.
 public actor MessageQueue<Value: Sendable> {
@@ -36,14 +35,14 @@ public actor MessageQueue<Value: Sendable> {
     
     /// Subscribe to messages on this `MessageQueue`.
     ///
-    /// The observation is cancellable using the returned `AnyCancellable` object.
+    /// The observation is cancellable using the returned `AnyCancellableAsync` object.
     ///
     /// Use this when the `MessageQueue` instance is long lived, and your consumer's lifetime is short.
     ///
-    /// - Returns: An `AnyCancellable` which can be used to cancel the observation.
-    public func observe(_ handler: @escaping Handler) async -> AnyCancellable {
+    /// - Returns: An `AnyCancellableAsync` which can be used to cancel the observation.
+    public func observe(_ handler: @escaping Handler) async -> AnyCancellableAsync {
         let id = self.addHandler(handler)
-        return AnyCancellable { [weak self] in
+        return AnyCancellableAsync { [weak self] in
             guard let self else { return }
             Task.detached {
                 await self.removeHandler(id)

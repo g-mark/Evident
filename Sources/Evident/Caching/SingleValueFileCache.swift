@@ -7,7 +7,7 @@
 
 import Foundation
 
-public actor SingleValueFileCache<Value: Codable>: SingleValueCache {
+public actor SingleValueFileCache<Value: Codable & Sendable>: SingleValueCache {
     
     enum State {
         case uninitialized

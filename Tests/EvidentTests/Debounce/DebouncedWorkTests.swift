@@ -23,7 +23,7 @@ final class DebouncedWorkTests: XCTestCase {
             }
         }
         
-        await waitForExpectations(timeout: 1)
+        await fulfillment(of: [workIsDone], timeout: 1)
         try await XCTAssertEqualAsync(await observer.num, 1)
     }
     

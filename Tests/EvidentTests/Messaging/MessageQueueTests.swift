@@ -6,7 +6,6 @@
 //
 
 import XCTest
-import Combine
 @testable import Evident
 
 final class MessageQueueTests: XCTestCase {
@@ -23,7 +22,7 @@ final class MessageQueueTests: XCTestCase {
         }
     }
     
-    private var cancellables: [AnyCancellable] = []
+    private var cancellables: [AnyCancellableAsync] = []
     
     override func tearDown() {
         cancellables = []
@@ -79,7 +78,7 @@ final class MessageQueueTests: XCTestCase {
         XCTAssertEqual(received2, [.one])
         
         // when
-        cancellable1.cancel()
+        await cancellable1.cancel()
         try await eventually { await queue.handlerCount() == 1 }
         
         queue.dispatch(.two(3))

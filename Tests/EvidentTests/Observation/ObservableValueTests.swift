@@ -6,12 +6,11 @@
 //
 
 import XCTest
-import Combine
 @testable import Evident
 
 final class ObservableValueTests: XCTestCase {
     
-    private var cancellables: [AnyCancellable] = []
+    private var cancellables: [AnyCancellableAsync] = []
     
     private actor Observer<T> {
         var values: [T] = []
@@ -255,7 +254,7 @@ final class ObservableValueTests: XCTestCase {
         XCTAssertEqual(values2, ["A", "B"])
         
         // when
-        cancellable.cancel()
+        await cancellable.cancel()
         try await Task.sleep(for: .milliseconds(10))
         
         await data.set(value: "C")

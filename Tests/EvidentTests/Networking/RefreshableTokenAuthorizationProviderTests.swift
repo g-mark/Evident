@@ -77,6 +77,10 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
     
     /// The provider must refresh the token after a call to `setNeedsRefresh()`.
     func test_validUnexpiredToken_needsRefresh() async throws {
+        let provider = provider!
+        let service = service!
+        let mockRequest = mockRequest
+        
         // given (start with valid token)
         await provider.setToken(MyToken(authorizationHeaderValue: "TOK", isExpired: false))
         let authorizedRequest = try await provider.authorize(mockRequest)
@@ -101,6 +105,10 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
     
     /// When the provider has a valid expired token, it must refresh it.
     func test_validExpiredToken_refreshSuccess() async throws {
+        let provider = provider!
+        let service = service!
+        let mockRequest = mockRequest
+        
         // given (start with valid, expired token)
         await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
         
@@ -134,6 +142,10 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
     
     /// The provider must throw an error when a token refresh fails.
     func test_validExpiredToken_refreshFailure() async throws {
+        let provider = provider!
+        let service = service!
+        let mockRequest = mockRequest
+        
         // given (start with expired token)
         await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
         
@@ -160,13 +172,27 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
     /// when multiple requests for an auth header value are made.
     /// All requests are satisfied using a refreshed value.
     func test_validExpiredToken_refreshMultipleSuccess() async throws {
+        let provider = provider!
+        let service = service!
+        let mockRequest = mockRequest
+        
         // given (start with expired token)
         await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
         
         // when (start a bunch of asks for a header value)
         let iterations = 100
         async let result = withThrowingTaskGroup(of: String?.self, returning: [String?].self) { group in
-            try await runMultipleCapturingValues(iterations, in: &group, using: provider)
+            for _ in 0..<iterations {
+                group.addTask {
+                    try await provider.authorize(mockRequest).authorizationHeaderValue
+                }
+            }
+            
+            var values = [String?]()
+            while let value = try await group.next() {
+                values.append(value)
+            }
+            return values
         }
         
         // then
@@ -185,13 +211,34 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
     /// when multiple requests for an auth header value are made.
     /// All requests throw the same error.
     func test_validExpiredToken_refreshMultipleFailure() async throws {
+        let provider = provider!
+        let service = service!
+        let mockRequest = mockRequest
+        
         // given (start with expired token)
         await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
         
         // when (start a bunch of asks for a header value)
         let iterations = 100
         async let result = withThrowingTaskGroup(of: String?.self, returning: [Result<String?, Error>].self) { group in
-            await runMultipleCapturingResults(iterations, in: &group, using: provider)
+            for _ in 0..<iterations {
+                group.addTask {
+                    try await provider.authorize(mockRequest).authorizationHeaderValue
+                }
+            }
+            
+            var values = [Result<String?, Error>]()
+            while true {
+                do {
+                    let value = try await group.next()
+                    guard let value else { break }
+                    values.append(.success(value))
+                }
+                catch {
+                    values.append(.failure(error))
+                }
+            }
+            return values
         }
         
         // then
@@ -208,13 +255,27 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
     
     /// The provider must use new `setToken()` values to resolve a pending refresh task.
     func test_validExpiredToken_interruptedWithValidToken() async throws {
+        let provider = provider!
+        let service = service!
+        let mockRequest = mockRequest
+        
         // given (start with expired token)
         await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
         
         // when (start a bunch of asks for a header value)
         let iterations = 100
         async let result = withThrowingTaskGroup(of: String?.self, returning: [String?].self) { group in
-            try await runMultipleCapturingValues(iterations, in: &group, using: provider)
+            for _ in 0..<iterations {
+                group.addTask {
+                    try await provider.authorize(mockRequest).authorizationHeaderValue
+                }
+            }
+            
+            var values = [String?]()
+            while let value = try await group.next() {
+                values.append(value)
+            }
+            return values
         }
         
         // then (wait for refresh to start)
@@ -231,13 +292,34 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
     
     /// The provider must immediately abort a token refresh when `reset()` is called.
     func test_validExpiredToken_interruptedByReset() async throws {
+        let provider = provider!
+        let service = service!
+        let mockRequest = mockRequest
+        
         // given (start with expired token)
         await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
         
         // when (start a bunch of asks for a header value)
         let iterations = 100
         async let result = withThrowingTaskGroup(of: String?.self, returning: [Result<String?, Error>].self) { group in
-            await runMultipleCapturingResults(iterations, in: &group, using: provider)
+            for _ in 0..<iterations {
+                group.addTask {
+                    try await provider.authorize(mockRequest).authorizationHeaderValue
+                }
+            }
+            
+            var values = [Result<String?, Error>]()
+            while true {
+                do {
+                    let value = try await group.next()
+                    guard let value else { break }
+                    values.append(.success(value))
+                }
+                catch {
+                    values.append(.failure(error))
+                }
+            }
+            return values
         }
         
         // then (wait for refresh to start)
@@ -254,12 +336,26 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
     
     /// The provider must cancel an in-progress refresh when a new refresh is manually started.
     func test_validExpiredToken_interruptedWithAlternateRefresh() async throws {
+        let provider = provider!
+        let service = service!
+        let mockRequest = mockRequest
+        
         await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
         
         // when
         let iterations = 100
         async let result = withThrowingTaskGroup(of: String?.self, returning: [String?].self) { group in
-            try await runMultipleCapturingValues(iterations, in: &group, using: provider)
+            for _ in 0..<iterations {
+                group.addTask {
+                    try await provider.authorize(mockRequest).authorizationHeaderValue
+                }
+            }
+            
+            var values = [String?]()
+            while let value = try await group.next() {
+                values.append(value)
+            }
+            return values
         }
         
         // then (wait for the refresh to start)
@@ -276,49 +372,6 @@ final class RefreshableTokenAuthorizationProviderTests: XCTestCase {
         let values = try await result
         XCTAssertTrue(values.allSatisfy { $0 == "ALT" })
         XCTAssertEqual(values.count, iterations)
-    }
-    
-    private func runMultipleCapturingValues(
-        _ iterations: Int,
-        in group: inout ThrowingTaskGroup<String?, Error>,
-        using provider: MyProvider
-    ) async throws -> [String?] {
-        for _ in 0..<iterations {
-            group.addTask { [mockRequest] in
-                try await provider.authorize(mockRequest).authorizationHeaderValue
-            }
-        }
-        
-        var values = [String?]()
-        while let value = try await group.next() {
-            values.append(value)
-        }
-        return values
-    }
-    
-    private func runMultipleCapturingResults(
-        _ iterations: Int,
-        in group: inout ThrowingTaskGroup<String?, Error>,
-        using provider: MyProvider
-    ) async -> [Result<String?, Error>] {
-        for _ in 0..<iterations {
-            group.addTask { [mockRequest] in
-                try await provider.authorize(mockRequest).authorizationHeaderValue
-            }
-        }
-        
-        var values = [Result<String?, Error>]()
-        while true {
-            do {
-                let value = try await group.next()
-                guard let value else { break }
-                values.append(.success(value))
-            }
-            catch {
-                values.append(.failure(error))
-            }
-        }
-        return values
     }
     
 }

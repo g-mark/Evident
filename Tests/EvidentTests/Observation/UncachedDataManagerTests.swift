@@ -6,7 +6,6 @@
 //
 
 import XCTest
-import Combine
 import Evident
 
 private struct MyData: Equatable {
@@ -68,7 +67,7 @@ final class UncachedDataManagerTests: XCTestCase {
     }
     
     private var manager: MyDataManager!
-    private var cancellables: [AnyCancellable] = []
+    private var cancellables: [AnyCancellableAsync] = []
     
     override func setUp() async throws {
         try await super.setUp()

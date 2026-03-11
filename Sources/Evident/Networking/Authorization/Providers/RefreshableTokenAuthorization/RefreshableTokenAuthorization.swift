@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import Combine
 
 /// An `AuthorizationProvider` that manages a refreshable `AuthorizationToken`.
 ///
@@ -153,7 +152,7 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     
     public func onTokenChange(
         _ handler: @escaping MessageQueue<TokenChangeMessage>.Handler
-    ) async -> AnyCancellable {
+    ) async -> AnyCancellableAsync {
         await tokenChanges.observe(handler)
     }
     

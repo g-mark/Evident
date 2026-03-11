@@ -6,7 +6,6 @@
 //
 
 import XCTest
-import Combine
 import Evident
 
 final class UncachedManagedValueTests: XCTestCase {
@@ -33,7 +32,7 @@ final class UncachedManagedValueTests: XCTestCase {
     
     private var managedValue: ManagedValue<Thing>!
     private var setter: ManagedValue<Thing>.Setter!
-    private var cancellables: [AnyCancellable] = []
+    private var cancellables: [AnyCancellableAsync] = []
     
     override func setUp() async throws {
         try await super.setUp()
@@ -202,7 +201,7 @@ final class UncachedManagedValueTests: XCTestCase {
         try await XCTAssertEqualAsync(await observer3.values, [0])
 
         // when
-        cancellable2.cancel()
+        await cancellable2.cancel()
         try await Task.sleep(for: .milliseconds(5))
 
         await setter.set(\.number, value: 2)
