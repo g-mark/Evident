@@ -30,12 +30,16 @@ import Foundation
 /// ```
 public actor ObservableValue<Value: Sendable> {
     
+    /// The current value. Setting this property notifies all active observers.
     public private(set) var value: Value {
         didSet {
             continuation?.yield((oldValue, value))
         }
     }
     
+    /// Creates an observable with the given initial value.
+    ///
+    /// - Parameter initialValue: The starting value for this observable.
     public init(initialValue: Value) {
         self.value = initialValue
     }
@@ -44,12 +48,18 @@ public actor ObservableValue<Value: Sendable> {
         continuation?.finish()
     }
     
-    /// Set the value.
+    /// Replaces the current value and notifies observers.
+    ///
+    /// - Parameter value: The new value to set.
     public func set(value: Value) async {
         self.value = value
     }
     
-    /// Set a part of the value.
+    /// Updates a property of the current value at the given key path and notifies observers.
+    ///
+    /// - Parameters:
+    ///   - keyPath: The key path to the property to update.
+    ///   - value: The new value for the property.
     public func set<T>(_ keyPath: WritableKeyPath<Value, T>, value: T) async {
         self.value[keyPath: keyPath] = value
     }
@@ -280,19 +290,6 @@ public actor ObservableValue<Value: Sendable> {
         func cancel() { _cancel() }
     }
     
-    private func initializeStreamIfNeeded() {
-        guard task == nil else { return }
-        
-        let (stream, continuation) = AsyncStream.makeStream(of: (Value, Value).self)
-        
-        self.continuation = continuation
-        self.task = Task {
-            for await (oldValue, value) in stream {
-                await sendNotifications(oldValue, value)
-            }
-        }
-    }
-    
     private nonisolated func register<T: Sendable>(
         _ keyPath: KeyPath<Value, T> & Sendable,
         isDifferent: @escaping @Sendable (T, T) -> Bool,
@@ -320,6 +317,19 @@ public actor ObservableValue<Value: Sendable> {
         keyedObservations[keyPath] = observations
         Task.detached { [keyPath, value] in
             await handler(nil, value[keyPath: keyPath])
+        }
+    }
+    
+    private func initializeStreamIfNeeded() {
+        guard task == nil else { return }
+        
+        let (stream, continuation) = AsyncStream.makeStream(of: (Value, Value).self)
+        
+        self.continuation = continuation
+        self.task = Task {
+            for await (oldValue, value) in stream {
+                await sendNotifications(oldValue, value)
+            }
         }
     }
     

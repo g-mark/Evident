@@ -21,6 +21,9 @@ public actor ManagedValue<Value: Sendable> {
         return (managedValue, Setter(managedValue))
     }
     
+    /// The current value.
+    ///
+    /// Accessing this property triggers lazy initialization if the value hasn't been loaded yet.
     public var value: Value {
         get async {
             await withCheckedContinuation { continuation in
@@ -156,7 +159,7 @@ public actor ManagedValue<Value: Sendable> {
         }
     }
     
-    // MARK: Implementation details
+    // MARK: - Implementation details
     
     private var state: State
     private let cache: (any SingleValueCache<Value>)?

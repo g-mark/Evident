@@ -21,16 +21,10 @@ let package = Package(
         .target(
             name: "Evident",
             dependencies: [],
-            swiftSettings: [
-                .enableUpcomingFeature("StrictConcurrency"),
-            ]
         ),
         .testTarget(
             name: "EvidentTests",
             dependencies: ["Evident"],
-            swiftSettings: [
-                .enableUpcomingFeature("StrictConcurrency"),
-            ]
         ),
     ]
 )
