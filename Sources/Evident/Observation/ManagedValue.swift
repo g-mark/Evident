@@ -165,12 +165,12 @@ public actor ManagedValue<Value: Sendable> {
     private let cache: (any SingleValueCache<Value>)?
     private let defaultValue: @Sendable () -> Value
     
-    private typealias Operation = @Sendable (ObservableValue<Value>) async -> Void
+    private typealias Operation = @Sendable (ObservableValueStore<Value>) async -> Void
     
     private enum State {
         case uninitialized
         case initializing([Operation])
-        case initialized(ObservableValue<Value>, AnyCancellableAsync?)
+        case initialized(ObservableValueStore<Value>, AnyCancellableAsync?)
     }
     
     /// Helper to allow for `nonisolated` value observations
@@ -183,7 +183,7 @@ public actor ManagedValue<Value: Sendable> {
             }
         }
         
-        init(_ managed: ManagedValue<Value>, _ op: @escaping @Sendable (ObservableValue<Value>) -> AnyCancellableAsync) {
+        init(_ managed: ManagedValue<Value>, _ op: @escaping @Sendable (ObservableValueStore<Value>) -> AnyCancellableAsync) {
             let task = Task.detached {
                 await withCheckedContinuation { continuation in
                     Task {
@@ -207,7 +207,7 @@ public actor ManagedValue<Value: Sendable> {
     }
     
     private nonisolated func register(
-        op: @escaping @Sendable (ObservableValue<Value>) -> AnyCancellableAsync
+        op: @escaping @Sendable (ObservableValueStore<Value>) -> AnyCancellableAsync
     ) -> AnyCancellableAsync {
         AnyCancellableAsync(Registration(self, op))
     }
@@ -245,7 +245,7 @@ public actor ManagedValue<Value: Sendable> {
         
         // Let all pending operations run, so as not to create leaks
         if case let .initializing(operations) = oldState {
-            let data = ObservableValue<Value>(initialValue: defaultValue())
+            let data = ObservableValueStore<Value>(initialValue: defaultValue())
             for operation in operations {
                 await operation(data)
             }
@@ -281,7 +281,7 @@ public actor ManagedValue<Value: Sendable> {
     }
     
     private func handleInitialValue(_ value: Value) async {
-        let data = ObservableValue<Value>(initialValue: value)
+        let data = ObservableValueStore<Value>(initialValue: value)
         var cancellable: AnyCancellableAsync?
         if cache != nil {
             cancellable = data.observe { [weak self] value in

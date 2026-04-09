@@ -24,7 +24,7 @@ struct ObservableValueTests {
             var name: String
             var number: Int
         }
-        let data = ObservableValue(initialValue: Thing(name: "Pat", number: 42))
+        let data = ObservableValueStore(initialValue: Thing(name: "Pat", number: 42))
         let observer = Observer<Thing>()
         let transitions = Observer<(Thing?, Thing)>()
         var cancellables: [AnyCancellableAsync] = []
@@ -91,7 +91,7 @@ struct ObservableValueTests {
             var name: String
             var number: Int
         }
-        let data = ObservableValue(initialValue: Thing(name: "Pat", number: 42))
+        let data = ObservableValueStore(initialValue: Thing(name: "Pat", number: 42))
         let observer = Observer<Thing>()
         var cancellables: [AnyCancellableAsync] = []
 
@@ -138,13 +138,51 @@ struct ObservableValueTests {
         _ = cancellables
     }
 
+    @Test func observeNonEquatableTypeWithTransitions() async throws {
+        // given
+        struct Thing {
+            var name: String
+            var number: Int
+        }
+        let data = ObservableValueStore(initialValue: Thing(name: "Pat", number: 42))
+        let observer = Observer<(Thing?, Thing)>()
+        var cancellables: [AnyCancellableAsync] = []
+
+        // when (set up observation)
+        data.observe { old, new in
+            await observer.collect((old, new))
+        }.store(in: &cancellables)
+
+        // then (initial call: old is nil)
+        let (initialOld, initialNew) = try await eventually { await observer.values.first }
+        #expect(initialOld == nil)
+        #expect(initialNew.name == "Pat")
+        #expect(initialNew.number == 42)
+
+        // when (non-Equatable fires on every set, even same value)
+        await data.set(\.name, value: "Pat")
+        await data.set(\.name, value: "Billie")
+
+        try await eventually { await observer.values.last?.1.name == "Billie" }
+        try await Task.sleep(for: .milliseconds(10))
+
+        let values = await observer.values
+        #expect(values.count == 3)
+        #expect(values[1].0?.name == "Pat")
+        #expect(values[1].1.name == "Pat")    // set to same value — old matches previous new
+        #expect(values[2].0?.name == "Pat")
+        #expect(values[2].1.name == "Billie")
+
+        _ = cancellables
+    }
+
     @Test func observeEquatableProperty() async throws {
         // given
         struct Thing: Equatable {
             var name: String
             var number: Int
         }
-        let data = ObservableValue(initialValue: Thing(name: "Pat", number: 42))
+        let data = ObservableValueStore(initialValue: Thing(name: "Pat", number: 42))
         let observer = Observer<String>()
         var cancellables: [AnyCancellableAsync] = []
 
@@ -173,6 +211,42 @@ struct ObservableValueTests {
         _ = cancellables
     }
 
+    @Test func observeEquatablePropertyWithTransitions() async throws {
+        // given
+        struct Thing: Equatable {
+            var name: String
+            var number: Int
+        }
+        let data = ObservableValueStore(initialValue: Thing(name: "Pat", number: 42))
+        let observer = Observer<(String?, String)>()
+        var cancellables: [AnyCancellableAsync] = []
+
+        // when (set up observation)
+        data.observe(\.name) { old, new in
+            await observer.collect((old, new))
+        }.store(in: &cancellables)
+
+        // then (initial call: old is nil)
+        let (initialOld, initialNew) = try await eventually { await observer.values.first }
+        #expect(initialOld == nil)
+        #expect(initialNew == "Pat")
+
+        // when
+        await data.set(\.name, value: "Pat")    // same value — no notification
+        await data.set(\.number, value: 37)     // different property — no notification
+        await data.set(\.name, value: "Billie") // changed — notification
+
+        try await eventually { await observer.values.count == 2 }
+        try await Task.sleep(for: .milliseconds(10))
+
+        let values = await observer.values
+        #expect(values.count == 2)
+        #expect(values[1].0 == "Pat")
+        #expect(values[1].1 == "Billie")
+
+        _ = cancellables
+    }
+
     @Test func observeNonEquatableProperty() async throws {
         // given
         struct Wrapped: ExpressibleByStringLiteral {
@@ -185,7 +259,7 @@ struct ObservableValueTests {
             var name: Wrapped
             var number: Int
         }
-        let data = ObservableValue(initialValue: Thing(name: "Pat", number: 42))
+        let data = ObservableValueStore(initialValue: Thing(name: "Pat", number: 42))
         let observer = Observer<String>()
         var cancellables: [AnyCancellableAsync] = []
 
@@ -213,9 +287,53 @@ struct ObservableValueTests {
         _ = cancellables
     }
 
+    @Test func observeNonEquatablePropertyWithTransitions() async throws {
+        // given
+        struct Wrapped: ExpressibleByStringLiteral {
+            let string: String
+            init(stringLiteral value: StringLiteralType) { string = value }
+        }
+        struct Thing {
+            var name: Wrapped
+            var number: Int
+        }
+        let data = ObservableValueStore(initialValue: Thing(name: "Pat", number: 42))
+        let observer = Observer<(Wrapped?, Wrapped)>()
+        var cancellables: [AnyCancellableAsync] = []
+
+        // when (set up observation)
+        data.observe(\.name) { old, new in
+            await observer.collect((old, new))
+        }.store(in: &cancellables)
+
+        // then (initial call: old is nil)
+        let (initialOld, initialNew) = try await eventually { await observer.values.first }
+        #expect(initialOld == nil)
+        #expect(initialNew.string == "Pat")
+
+        // when (non-Equatable fires on every root value set)
+        await data.set(\.name, value: "Pat")    // same — still fires
+        await data.set(\.number, value: 37)     // different property — still fires
+        await data.set(\.name, value: "Billie") // different — fires
+
+        try await eventually { await observer.values.count == 4 }
+        try await Task.sleep(for: .milliseconds(10))
+
+        let values = await observer.values
+        #expect(values.count == 4)
+        #expect(values[1].0?.string == "Pat")
+        #expect(values[1].1.string == "Pat")   // set to same value
+        #expect(values[2].0?.string == "Pat")
+        #expect(values[2].1.string == "Pat")   // unrelated property changed, name unchanged
+        #expect(values[3].0?.string == "Pat")
+        #expect(values[3].1.string == "Billie")
+
+        _ = cancellables
+    }
+
     @Test func cancellableObservations() async throws {
         // given
-        let data = ObservableValue(initialValue: "A")
+        let data = ObservableValueStore(initialValue: "A")
         let observer1 = Observer<String>()
         let observer2 = Observer<String>()
         var cancellables: [AnyCancellableAsync] = []
@@ -266,7 +384,7 @@ struct ObservableValueTests {
     
     @Test func valuesAreOrdered() async throws {
         // given
-        let data = ObservableValue(initialValue: 1)
+        let data = ObservableValueStore(initialValue: 1)
         let observer = Observer<Int>()
         var cancellables: [AnyCancellableAsync] = []
         
