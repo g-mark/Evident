@@ -93,7 +93,7 @@ extension ObservableValue {
     /// - Returns: An `AnyCancellableAsync` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
     ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
-    nonisolated func observe<T: Sendable>(
+    public nonisolated func observe<T: Sendable>(
         _ keyPath: KeyPath<Value, T> & Sendable,
         handler: @escaping @Sendable (T) async -> Void
     ) -> AnyCancellableAsync {
@@ -122,7 +122,7 @@ extension ObservableValue {
     /// - Returns: An `AnyCancellableAsync` object used to cancel the observation.
     ///            The observation must be cancelled when no longer needed,
     ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
-    nonisolated func observe<T: Equatable & Sendable>(
+    public nonisolated func observe<T: Equatable & Sendable>(
         _ keyPath: KeyPath<Value, T> & Sendable,
         handler: @escaping @Sendable (T) async -> Void
     ) -> AnyCancellableAsync {
@@ -197,7 +197,7 @@ extension ObservableValue where Value: Equatable {
     ///            either implicitly by releasing the `AnyCancellableAsync`, or explicitly by calling   `cancel()` on it.
     public nonisolated func observe(
         handler: @escaping @Sendable (Value?, Value) async -> Void
-    ) -> AnyCancellableAsync where Value: Equatable {
+    ) -> AnyCancellableAsync {
         observe(\.self, handler: handler)
     }
 
