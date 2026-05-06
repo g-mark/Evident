@@ -13,18 +13,18 @@ let package = Package(
     products: [
         .library(
             name: "Evident",
-            targets: ["Evident"]),
+            targets: ["Evident"]
+        )
     ],
-    dependencies: [
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "Evident",
-            dependencies: [],
+            dependencies: []
         ),
         .testTarget(
             name: "EvidentTests",
-            dependencies: ["Evident"],
-        ),
+            dependencies: ["Evident"]
+        )
     ]
 )
