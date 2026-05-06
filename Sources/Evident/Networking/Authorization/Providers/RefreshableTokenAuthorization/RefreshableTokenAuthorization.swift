@@ -238,7 +238,10 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     /// Starts the process of refreshing a token.
     ///
     /// Changes `state` to `refreshing` with an empty set of waiters.
-    private func startRefreshing(_ token: Token?, using work: @escaping @Sendable () async throws -> Token) {
+    private func startRefreshing(
+        _ token: Token?,
+        using work: @escaping @Sendable () async throws -> Token
+    ) {
         let task = Task {
             let result = await Result {
                 try await work()
