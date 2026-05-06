@@ -111,7 +111,7 @@ public final class MessageQueue<Message: Sendable>: Sendable {
         }
         
         private func emit(_ message: Message) async {
-            await withTaskGroup { group in
+            await withTaskGroup(of: Void.self) { group in
                 for handler in handlers.values {
                     group.addTask {
                         await handler(message)
