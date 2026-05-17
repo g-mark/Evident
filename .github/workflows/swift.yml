@@ -4,35 +4,41 @@
 name: Swift
 
 on:
-  push:
   pull_request:
+  push:
     branches: [ "main" ]
 
 jobs:
   build:
 
     name: Build and test (${{ matrix.name }})
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: macos-15 # as of 2026-05-17, same as macos-latest; macos-26 only has ios-26 simulators.
     strategy:
       fail-fast: false
       matrix:
+        # See https://github.com/actions/runner-images for images.
+        # Check what is labelled "macos-latest", and in each image what the "default" Xcode is.
+        # Latest & default are behind the bleeding edge.
+        # Evident requires Swift 6.2, which means Xcode 26.
         include:
-        - name: default
-          runs-on: macos-latest
-          xcode: ""
-        - name: Xcode 16.2
-          runs-on: macos-14
-          xcode: /Applications/Xcode_16.2.app
+          - name: "default Xcode 26.3"
+            xcode: "26.3"
 
     steps:
     - uses: actions/checkout@v4
     - name: Select Xcode
-      if: ${{ matrix.xcode != '' }}
-      run: sudo xcode-select -s "${{ matrix.xcode }}"
+      if: matrix.xcode != 'default'
+      env:
+        XCODE_VERSION: ${{ matrix.xcode }}
+      run: |
+        sudo xcode-select -switch "/Applications/Xcode_${XCODE_VERSION}.app"
     - name: Show toolchain
       run: |
         xcodebuild -version
         swift --version
+    - name: Show destination
+      run: |
+        echo "${{ matrix.destination }}"
     - name: Build
       run: swift build -v
     - name: Run tests
