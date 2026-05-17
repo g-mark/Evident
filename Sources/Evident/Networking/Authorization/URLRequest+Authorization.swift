@@ -13,6 +13,7 @@ extension URLRequest {
     ///
     /// - Parameter provider: The ``AuthorizationProvider`` to use for authorization.
     /// - Throws: An error if authorization fails.
+    nonisolated(nonsending)
     public mutating func authorize(using provider: AuthorizationProvider) async throws {
         self = try await provider.authorize(self)
     }

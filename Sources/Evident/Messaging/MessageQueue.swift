@@ -36,7 +36,7 @@ import Foundation
 /// }
 /// ```
 public final class MessageQueue<Message: Sendable>: Sendable {
-    
+
     /// The type of closure used to handle dispatched messages.
     public typealias Handler = @Sendable (Message) async -> Void
 
@@ -80,6 +80,7 @@ public final class MessageQueue<Message: Sendable>: Sendable {
     /// Use this when the `MessageQueue` instance is long lived, and your consumer's lifetime is short.
     ///
     /// - Returns: An `AnyCancellableAsync` which can be used to cancel the observation.
+    nonisolated(nonsending)
     public func observe(_ handler: @escaping Handler) async -> AnyCancellableAsync {
         let id = await observations.addHandler(handler)
         return AnyCancellableAsync { [weak self] in
