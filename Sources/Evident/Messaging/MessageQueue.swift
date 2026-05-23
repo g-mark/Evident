@@ -10,6 +10,8 @@ import Foundation
 /// General purpose message queue, supporting cancellable observations.
 ///
 /// Thread safe, one-to-many messaging.
+/// - Messages are sent in the order in which they are received.
+/// - The order in which oibservers are called for each single message is nondeterministic.
 ///
 /// Dispatch from anywhere:
 /// ```swift

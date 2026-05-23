@@ -9,6 +9,18 @@ import Foundation
 
 /// Read-only, optionally cached observable value, with controlled mutability via special `Setter` object.
 ///
+/// `ManagedValue` is intended to be a building block for domain-specific "data manager" / "repository"
+/// kinds of concepts. E.g., an app that manages a user's contacts might want a ContactsRepository that allows for:
+/// - read only access to the current list of contacts;
+/// - observing changes to the list of contacts; and
+/// - dedicated mothods for modifying contacts.
+///
+/// Use `ManagedValue.create(cache:defaultValue:)` to create a tuple of:
+/// - a `ManagedValue` instance that provides read-only access to the value
+/// - a separete "setter" object for pushing changes.
+/// The `ManagedValue` instance can then be made directly available to callers, while keeping
+/// the setter protected behind your domain-specific mutation functions.
+///
 /// Initialization from cache / defaultValue is lazy, meaning initialization occurs when an observation is created.
 public actor ManagedValue<Value: Sendable> {
     
