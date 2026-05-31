@@ -47,7 +47,7 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     /// Creates a refreshable token authorization provider.
     ///
     /// The provider starts in an invalid state with no token.
-    /// Use ``setToken(_:)`` or ``refresh(using:)`` to provide an initial token.
+    /// Use ``setToken(_:)`` or ``authenticate(using:)`` to provide an initial token.
     ///
     /// - Parameter service: The service used to refresh expired tokens.
     public init(service: TokenService) {
@@ -70,9 +70,18 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
             throw error
         
         case .valid(let token) where token.isExpired:
-            return try await withCheckedThrowingContinuation { continuation in
-                startRefreshing(token, using: { try await self.service.refresh(token) })
-                addRefreshWaiter(continuation, for: request)
+            let id = UUID()
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    startRefreshing(.opportunistic, token: token, using: { try await self.service.refresh(token) })
+                    addRefreshWaiter(continuation, id: id, for: request)
+                }
+            } onCancel: {
+                Task {
+                    if let waiter = await removeWaiter(id: id) {
+                        waiter.resume(.failure(CancellationError()))
+                    }
+                }
             }
         
         case .valid(let token):
@@ -100,12 +109,17 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
         changeState(to: .valid(token))
     }
     
-    /// Reset the provider by manually starting a new token refresh, using the supplied closure to provide a new token.
+    /// Authenticate the provider by supplying a closure that produces a new token.
     ///
-    /// - Any subsequent calls to `authorizationHeaderValue()` will wait for the new refresh to finish.
-    /// - If a refresh is already in progress it will be replaced, maintaining any pending `authorizationHeaderValue()` calls.
+    /// - Any subsequent calls to `authorizationHeaderValue()` will wait for the new token to be produced.
+    /// - If a refresh is already in progress it will be replaced, maintaining any pending `authorizationHeaderValue()`
+    ///   calls (i.e., any calls waiting on an expired token refresh will receive the result of the new `authenticate()` work).
+    /// - If another `authenticate()` call replaces this one, the awaiting caller will receive the replacing call's result,
+    ///   not their own work's result.
+    /// - Cancelling a task that calls `authenticate()` will result in _all_ callers awaiting a fresh token to receive a
+    ///   cancellation error.
     ///
-    /// `refresh()` starts the refresh `work`, and immediately returns, without waiting for `work` to finish.
+    /// `authenticate()` waits for `work` to finish.
     ///
     /// This can be used, for example, to manually log a user in, or retrieve tokens from storage.
     /// ```swift
@@ -114,25 +128,35 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     /// )
     ///
     /// // by logging in
-    /// await sharedOidcAuth.refresh {
+    /// try await sharedOidcAuth.authenticate {
     ///     return sharedOidcService.login(username, password)
     /// }
     ///
     /// // or by retrieving from some kind of storage:
-    /// await sharedOidcAuth.refresh {
+    /// try await sharedOidcAuth.authenticate {
     ///     return try await KeychainHelper.shared.retrieve(...)
     /// }
     /// ```
     ///
     /// - Parameter work: A closure that returns a new `Token`.
-    public func refresh(using work: @escaping @Sendable () async throws -> Token) async {
+    public func authenticate(using work: @escaping @Sendable () async throws -> Token) async throws {
         let token = state.token
-        startRefreshing(token, using: work)
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                startRefreshing(.exclusive, token: token, using: work)
+                addRefreshWaiter(continuation, id: id) { _ in }
+            }
+        } onCancel: {
+            Task {
+                await reset()
+            }
+        }
     }
     
     /// Set the current token to a known value.
     ///
-    /// - Cancels any pending refresh tasks.
+    /// - Cancels any pending refresh tasks - either manual calls to `authenticate()` or background token refreshes.
     /// - All pending and future calls to `authorizationHeaderValue()` will receive a value based on the new token.
     ///
     /// - Parameter token: The new `Token`.
@@ -180,13 +204,13 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     private enum State {
         case invalid(Error)
         case valid(Token)
-        case refreshing(Token?, Task<Void, Never>, Set<Waiter>)
-        
+        case refreshing(Token?, Task<Void, Never>, Set<Waiter>, Priority)
+
         var token: Token? {
             switch self {
             case .invalid: return nil
             case .valid(let token): return token
-            case .refreshing(let token, _, _): return token
+            case .refreshing(let token, _, _, _): return token
             }
         }
         
@@ -197,7 +221,16 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
             }
         }
     }
-    
+
+    private enum Priority {
+        // Newest refresh request wins, existing in-flight refreshes are cancelled
+        case opportunistic
+
+        // New refresh requests await an in-flight exclusive refresh
+        // These are "milestone" refreshes, like an initial login.
+        case exclusive
+    }
+
     typealias Continuation = CheckedContinuation<URLRequest, Error>
     
     private struct InternalError: Error {
@@ -206,42 +239,86 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     }
     
     /// Represents a call to `authorize(_:)` that is awaiting a token refresh.
-    private struct Waiter: Hashable {
-        let id: UUID = UUID()
-        let resume: (Result<Token, Error>) -> Void
-        
-        init(_ continuation: Continuation, for request: URLRequest) {
+    private struct Waiter: Hashable, Sendable {
+        let id: UUID
+        let resume: @Sendable (Result<Token, Error>) -> Void
+
+        init<T: Sendable>(
+            _ continuation: CheckedContinuation<T, Error>,
+            id: UUID = UUID(),
+            mapping: @Sendable @escaping (Token) -> T
+        ) {
+            self.id = id
             resume = { result in
-                continuation.resume(with: result.map { request.withAuthorization(token: $0) })
+                continuation.resume(with: result.map(mapping))
             }
         }
-        
+
         static func == (lhs: Waiter, rhs: Waiter) -> Bool {
             lhs.id == rhs.id
         }
-        
+
         func hash(into hasher: inout Hasher) {
             id.hash(into: &hasher)
         }
     }
-    
+
     /// Adds the `continuation` to the current `refreshing` list of waiters.
-    private func addRefreshWaiter(_ continuation: Continuation, for request: URLRequest) {
-        guard case let .refreshing(token, task, waiters) = self.state else {
+    private func addRefreshWaiter(
+        _ continuation: Continuation,
+        id: UUID = UUID(),
+        for request: URLRequest
+    ) {
+        addRefreshWaiter(continuation, id: id) {
+            request.withAuthorization(token: $0)
+        }
+    }
+
+    /// Adds the `continuation` to the current `refreshing` list of waiters.
+    private func addRefreshWaiter<T: Sendable>(
+        _ continuation: CheckedContinuation<T, Error>,
+        id: UUID = UUID(),
+        mapping: @Sendable @escaping (Token) -> T
+    ) {
+        guard case let .refreshing(token, task, waiters, priority) = self.state else {
             continuation.resume(throwing: InternalError("addRefreshWaiter while not refreshing"))
             return
         }
-        let waiter = Waiter(continuation, for: request)
-        changeState(to: .refreshing(token, task, waiters.inserting(waiter)))
+        let waiter = Waiter(continuation, id: id, mapping: mapping)
+        changeState(to: .refreshing(token, task, waiters.inserting(waiter), priority))
     }
-    
+
+    private func removeWaiter(id: UUID) -> Waiter? {
+        guard case let .refreshing(token, task, waiters, priority) = self.state,
+              let index = waiters.firstIndex(where: { $0.id == id }) else {
+            return nil
+        }
+
+        var updated = waiters
+        let waiter = updated.remove(at: index)
+        changeState(to: .refreshing(token, task, updated, priority))
+        return waiter
+    }
+
     /// Starts the process of refreshing a token.
     ///
     /// Changes `state` to `refreshing` with an empty set of waiters.
     private func startRefreshing(
-        _ token: Token?,
+        _ atPriority: Priority,
+        token: Token?,
         using work: @escaping @Sendable () async throws -> Token
     ) {
+        var waiters: Set<Waiter> = []
+        if case let .refreshing(_, _, inFlightWaiters, _) = state {
+            waiters = inFlightWaiters
+        }
+
+        // An in-flight exclusive refresh is not preempted by an incoming opportunistic refresh.
+        if atPriority == .opportunistic,
+           case let .refreshing(_, _, _, priority) = state,
+           priority == .exclusive {
+            return
+        }
         let task = Task {
             let result = await Result {
                 try await work()
@@ -256,7 +333,7 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
             }
         }
         
-        self.changeState(to: .refreshing(token, task, []))
+        self.changeState(to: .refreshing(token, task, waiters, atPriority))
     }
     
     /// Changes the current `state` to the specified value.
@@ -269,21 +346,23 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
              (.valid, _):
             state = newState
             
-        case (.refreshing(_, let oldTask, let oldWaiters), .invalid(let error)):
+        case (.refreshing(_, let oldTask, let oldWaiters, _), .invalid(let error)):
             oldTask.cancel()
             oldWaiters.forEach { $0.resume(.failure(error)) }
             state = newState
             
-        case (.refreshing(_, let oldTask, let oldWaiters), .valid(let token)):
+        case (.refreshing(_, let oldTask, let oldWaiters, _), .valid(let token)):
             oldTask.cancel()
             oldWaiters.forEach { $0.resume(.success(token)) }
             state = newState
             
-        case (.refreshing(_, let oldTask, let oldWaiters), .refreshing(let token, let newTask, let newWaiters)):
+        case (let .refreshing(_, oldTask, _, _),
+              let .refreshing(token, newTask, newWaiters, newPriority)):
+            // Note: blocking an `exclusive` -> `opportunistic` change is handled in `startRefreshing`.
             if oldTask != newTask {
                 oldTask.cancel()
             }
-            state = .refreshing(token, newTask, oldWaiters.union(newWaiters))
+            state = .refreshing(token, newTask, newWaiters, newPriority)
         }
         
         switch newState {

@@ -325,7 +325,7 @@ struct RefreshableTokenAuthorizationProviderTests {
         let continuation = try await eventually { await service.continuation }
 
         // when (manually refresh the token using an alternate method)
-        await provider.refresh {
+        try await provider.authenticate {
             MyToken(authorizationHeaderValue: "ALT", isExpired: false)
         }
         // (send response to original refresh request)
@@ -337,4 +337,196 @@ struct RefreshableTokenAuthorizationProviderTests {
         #expect(values.count == iterations)
     }
 
+    /// Cancelling the Task that called `authorize()` while a token refresh is in flight must:
+    /// - resume the calling task immediately with a `CancellationError`, and
+    /// - leave the underlying token refresh running so that subsequent calls see its result.
+    @Test func cancellingAuthorizeResumesBeforeRefreshFinishes() async throws {
+        // given (start with an expired token)
+        await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
+
+        // when (start an authorize call in a cancellable task)
+        let authorizeTask = Task {
+            try await provider.authorize(mockRequest)
+        }
+
+        // then (the refresh kicks off)
+        let continuation = try await eventually { await service.continuation }
+
+        // when (cancel the calling task — refresh is still in flight, continuation NOT yet resumed)
+        authorizeTask.cancel()
+
+        // then (the calling task resumes with CancellationError before the refresh finishes)
+        await #expect(throws: CancellationError.self) {
+            try await authorizeTask.value
+        }
+
+        // when (the underlying refresh — which kept running despite the caller's cancellation — completes)
+        continuation.resume(returning: MyToken(authorizationHeaderValue: "NEW", isExpired: false))
+
+        // then (a subsequent authorize() sees the refreshed token, proving the refresh ran to completion)
+        let value = try await eventually {
+            let headerValue = try await provider.authorize(mockRequest).authorizationHeaderValue
+            return headerValue == "NEW" ? headerValue : nil
+        }
+        #expect(value == "NEW")
+    }
+
+    /// Cancelling the Task that called `authenticate()` must reset the provider, so that:
+    /// - the authenticate caller fails,
+    /// - all queued `authorize()` waiters also fail,
+    /// - the underlying refresh work is cancelled (its belated result is discarded), and
+    /// - the provider is left in an invalid state.
+    @Test func cancellingAuthenticateInvalidatesProviderAndAllWaiters() async throws {
+        // given (start with an expired token so concurrent authorize() calls queue as waiters)
+        await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
+
+        // when (start authenticate in a cancellable task, held pending via the service continuation)
+        let placeholder = MyToken(authorizationHeaderValue: "OLD", isExpired: true)
+        let authenticateTask = Task {
+            try await provider.authenticate {
+                try await self.service.refresh(placeholder)
+            }
+        }
+
+        // then (authenticate is in flight)
+        let serviceContinuation = try await eventually { await service.continuation }
+
+        // when (many concurrent authorize() calls pile up as waiters)
+        let iterations = 50
+        async let authResults = withThrowingTaskGroup(of: String?.self, returning: [Result<String?, Error>].self) { group in
+            for _ in 0..<iterations {
+                group.addTask {
+                    try await provider.authorize(mockRequest).authorizationHeaderValue
+                }
+            }
+            var values = [Result<String?, Error>]()
+            while true {
+                do {
+                    let value = try await group.next()
+                    guard let value else { break }
+                    values.append(.success(value))
+                }
+                catch {
+                    values.append(.failure(error))
+                }
+            }
+            return values
+        }
+
+        // (give time for authorize calls to land on the actor and queue as waiters)
+        try await Task.sleep(for: .milliseconds(50))
+
+        // when (cancel the authenticate task — onCancel resets the provider)
+        authenticateTask.cancel()
+
+        // then (the authenticate caller fails — the reset resumed its continuation with NotAuthorized)
+        await #expect(throws: NotAuthorized.self) {
+            try await authenticateTask.value
+        }
+
+        // then (every queued authorize() waiter also failed via the reset)
+        let values = await authResults
+        #expect(values.count == iterations)
+        #expect(values.allSatisfy { $0.error is NotAuthorized })
+
+        // when (the underlying refresh's work belatedly completes — its result must NOT revive the provider)
+        serviceContinuation.resume(returning: MyToken(authorizationHeaderValue: "BELATED", isExpired: false))
+
+        // then (the provider remains invalid; the late result was discarded)
+        await #expect(throws: NotAuthorized.self) {
+            try await provider.authorize(mockRequest)
+        }
+    }
+
+    /// A call to `authenticate()` whose work throws must propagate the error to the caller.
+    @Test func authenticateThrowsWhenWorkThrows() async throws {
+        // when / then
+        await #expect(throws: MyError.mockError) {
+            try await provider.authenticate {
+                throw MyError.mockError
+            }
+        }
+
+        // then (provider is left in an invalid state)
+        await #expect(throws: (any Error).self) {
+            try await provider.authorize(mockRequest)
+        }
+    }
+
+    /// While an `authenticate()` call is in flight, concurrent `authorize()` calls for an
+    /// expired token must NOT start their own refresh — they must queue as waiters and
+    /// receive the in-flight call's result.
+    @Test func authenticateAbsorbsConcurrentAuthorize() async throws {
+        // given (seed with an expired token — the would-be opportunistic refresh path)
+        await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
+
+        // when (start an authenticate call, held pending via the service continuation)
+        let placeholder = MyToken(authorizationHeaderValue: "OLD", isExpired: true)
+        async let authResult: Void = provider.authenticate {
+            try await self.service.refresh(placeholder)
+        }
+
+        // then (refresh is in flight)
+        let continuation = try await eventually { await service.continuation }
+
+        // when (many concurrent authorize() calls pile up while authenticate is in flight)
+        let iterations = 50
+        async let authResults = withThrowingTaskGroup(of: String?.self, returning: [String?].self) { group in
+            for _ in 0..<iterations {
+                group.addTask {
+                    try await provider.authorize(mockRequest).authorizationHeaderValue
+                }
+            }
+            var values = [String?]()
+            while let value = try await group.next() {
+                values.append(value)
+            }
+            return values
+        }
+
+        // (give time for authorize calls to land on the actor and queue as waiters)
+        try await Task.sleep(for: .milliseconds(50))
+
+        // when (authenticate completes successfully)
+        continuation.resume(returning: MyToken(authorizationHeaderValue: "NEW", isExpired: false))
+
+        // then (the authenticate caller resolves)
+        try await authResult
+
+        // then (all queued authorize calls resolved with the authenticate's token —
+        // if any had started their own refresh, MyTokenService would have thrown `alreadyRefreshing`)
+        let values = try await authResults
+        #expect(values.count == iterations)
+        #expect(values.allSatisfy { $0 == "NEW" })
+    }
+
+    /// A second `authenticate()` must replace an in-flight `authenticate()`,
+    /// cancel its task, and resolve the first caller using the second call's result.
+    @Test func authenticateReplacesInflightAndMergesWaiters() async throws {
+        // given (a first authenticate call, held pending via the service continuation)
+        let placeholder = MyToken(authorizationHeaderValue: "OLD", isExpired: true)
+        async let firstResult: Void = provider.authenticate {
+            try await self.service.refresh(placeholder)
+        }
+        let firstContinuation = try await eventually { await service.continuation }
+
+        // when (a second authenticate replaces the first with an immediate result)
+        try await provider.authenticate {
+            MyToken(authorizationHeaderValue: "SECOND", isExpired: false)
+        }
+
+        // then (the first caller resolves successfully — it was merged into the second's waiter set)
+        try await firstResult
+
+        // then (the actor state reflects the second authenticate)
+        let value = try await provider.authorize(mockRequest).authorizationHeaderValue
+        #expect(value == "SECOND")
+
+        // when (the first authenticate's underlying work belatedly completes)
+        firstContinuation.resume(returning: MyToken(authorizationHeaderValue: "FIRST", isExpired: false))
+
+        // then (the late result is discarded; state remains the second refresh's token)
+        let afterValue = try await provider.authorize(mockRequest).authorizationHeaderValue
+        #expect(afterValue == "SECOND")
+    }
 }

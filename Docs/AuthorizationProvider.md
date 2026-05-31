@@ -124,19 +124,21 @@ await sharedAuthProvidet.setToken(token)
 
 All pending (and future) "authorize `URLRequest`" tasks will resume using the new token value.
 
-#### Manually "refresh" a token
+#### Manually authenticate
 
-Supporting user login is achieved by "refreshing" a token while providing an async method that runs the refresh.  I.e., a token refresh that uses a custom method instead of the provider's `RefreshableTokenService` `refresh()` method.
+Supporting user login (or restoring a token from storage) is achieved by calling `authenticate(using:)` with an async closure that produces a new token. This uses a custom method instead of the provider's `RefreshableTokenService` `refresh()` method.
 
 ```swift
-await sharedAuthProvider.refresh {
+try await sharedAuthProvider.authenticate {
   let token = try await sharedTokenService.login(username, password)
   // opportunity to do something with the username here
   return token
 }
 ```
 
-This puts the provider into a "refreshing" state. All following "authorize `URLRequest`" calls will wait for the custom refresh to finish, and will resume using the new token value.
+This puts the provider into a "refreshing" state and waits for the closure to finish. All concurrent "authorize `URLRequest`" calls will wait for the custom refresh, and will resume using the new token value.
+
+Cancelling the Task that called `authenticate()` invalidates the provider: the underlying work is cancelled, and every awaiting caller (including any queued `authorize()` calls) fails with a `NotAuthorized` error.
 
 #### Logout
 
