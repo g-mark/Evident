@@ -325,7 +325,7 @@ struct RefreshableTokenAuthorizationProviderTests {
         let continuation = try await eventually { await service.continuation }
 
         // when (manually refresh the token using an alternate method)
-        try await provider.refresh {
+        try await provider.authenticate {
             MyToken(authorizationHeaderValue: "ALT", isExpired: false)
         }
         // (send response to original refresh request)
@@ -371,11 +371,11 @@ struct RefreshableTokenAuthorizationProviderTests {
         #expect(value == "NEW")
     }
 
-    /// A manual `refresh()` whose work throws must propagate the error to the caller.
-    @Test func refreshThrowsWhenWorkThrows() async throws {
+    /// A call to `authenticate()` whose work throws must propagate the error to the caller.
+    @Test func authenticateThrowsWhenWorkThrows() async throws {
         // when / then
         await #expect(throws: MyError.mockError) {
-            try await provider.refresh {
+            try await provider.authenticate {
                 throw MyError.mockError
             }
         }
@@ -386,23 +386,23 @@ struct RefreshableTokenAuthorizationProviderTests {
         }
     }
 
-    /// While an exclusive `refresh()` is in flight, concurrent `authorize()` calls for an
+    /// While an `authenticate()` call is in flight, concurrent `authorize()` calls for an
     /// expired token must NOT start their own refresh — they must queue as waiters and
-    /// receive the exclusive refresh's result.
-    @Test func exclusiveRefreshAbsorbsConcurrentAuthorize() async throws {
+    /// receive the in-flight call's result.
+    @Test func authenticateAbsorbsConcurrentAuthorize() async throws {
         // given (seed with an expired token — the would-be opportunistic refresh path)
         await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
 
-        // when (start an exclusive refresh, held pending via the service continuation)
+        // when (start an authenticate call, held pending via the service continuation)
         let placeholder = MyToken(authorizationHeaderValue: "OLD", isExpired: true)
-        async let refreshResult: Void = provider.refresh {
+        async let authResult: Void = provider.authenticate {
             try await self.service.refresh(placeholder)
         }
 
         // then (refresh is in flight)
         let continuation = try await eventually { await service.continuation }
 
-        // when (many concurrent authorize() calls pile up while exclusive refresh is in flight)
+        // when (many concurrent authorize() calls pile up while authenticate is in flight)
         let iterations = 50
         async let authResults = withThrowingTaskGroup(of: String?.self, returning: [String?].self) { group in
             for _ in 0..<iterations {
@@ -420,42 +420,42 @@ struct RefreshableTokenAuthorizationProviderTests {
         // (give time for authorize calls to land on the actor and queue as waiters)
         try await Task.sleep(for: .milliseconds(50))
 
-        // when (exclusive refresh completes successfully)
+        // when (authenticate completes successfully)
         continuation.resume(returning: MyToken(authorizationHeaderValue: "NEW", isExpired: false))
 
-        // then (the exclusive refresh caller resolves)
-        try await refreshResult
+        // then (the authenticate caller resolves)
+        try await authResult
 
-        // then (all queued authorize calls resolved with the exclusive refresh's token —
+        // then (all queued authorize calls resolved with the authenticate's token —
         // if any had started their own refresh, MyTokenService would have thrown `alreadyRefreshing`)
         let values = try await authResults
         #expect(values.count == iterations)
         #expect(values.allSatisfy { $0 == "NEW" })
     }
 
-    /// A second exclusive `refresh()` must replace an in-flight exclusive refresh,
-    /// cancel its task, and resolve the first caller using the second refresh's result.
-    @Test func exclusiveRefreshReplacesExclusiveAndMergesWaiters() async throws {
-        // given (a first exclusive refresh, held pending via the service continuation)
+    /// A second `authenticate()` must replace an in-flight `authenticate()`,
+    /// cancel its task, and resolve the first caller using the second call's result.
+    @Test func authenticateReplacesInflightAndMergesWaiters() async throws {
+        // given (a first authenticate call, held pending via the service continuation)
         let placeholder = MyToken(authorizationHeaderValue: "OLD", isExpired: true)
-        async let firstResult: Void = provider.refresh {
+        async let firstResult: Void = provider.authenticate {
             try await self.service.refresh(placeholder)
         }
         let firstContinuation = try await eventually { await service.continuation }
 
-        // when (a second exclusive refresh replaces the first with an immediate result)
-        try await provider.refresh {
+        // when (a second authenticate replaces the first with an immediate result)
+        try await provider.authenticate {
             MyToken(authorizationHeaderValue: "SECOND", isExpired: false)
         }
 
         // then (the first caller resolves successfully — it was merged into the second's waiter set)
         try await firstResult
 
-        // then (the actor state reflects the second refresh)
+        // then (the actor state reflects the second authenticate)
         let value = try await provider.authorize(mockRequest).authorizationHeaderValue
         #expect(value == "SECOND")
 
-        // when (the first refresh's underlying work belatedly completes)
+        // when (the first authenticate's underlying work belatedly completes)
         firstContinuation.resume(returning: MyToken(authorizationHeaderValue: "FIRST", isExpired: false))
 
         // then (the late result is discarded; state remains the second refresh's token)

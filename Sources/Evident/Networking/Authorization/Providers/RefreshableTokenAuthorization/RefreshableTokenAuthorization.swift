@@ -47,7 +47,7 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     /// Creates a refreshable token authorization provider.
     ///
     /// The provider starts in an invalid state with no token.
-    /// Use ``setToken(_:)`` or ``refresh(using:)`` to provide an initial token.
+    /// Use ``setToken(_:)`` or ``authenticate(using:)`` to provide an initial token.
     ///
     /// - Parameter service: The service used to refresh expired tokens.
     public init(service: TokenService) {
@@ -109,15 +109,17 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
         changeState(to: .valid(token))
     }
     
-    /// Reset the provider by manually starting a new token refresh, using the supplied closure to provide a new token.
+    /// Authenticate the provider by supplying a closure that produces a new token.
     ///
-    /// - Any subsequent calls to `authorizationHeaderValue()` will wait for the new refresh to finish.
-    /// - If a refresh is already in progress it will be replaced, maintaining any pending `authorizationHeaderValue()` calls
-    ///   (i.e., any calls waiting on an expired token refresh will receive the result of the new `refresh()` work).
-    /// - If another `refresh()` call replaces this one, the awaiting caller will receive the replacing refresh's result,
+    /// - Any subsequent calls to `authorizationHeaderValue()` will wait for the new token to be produced.
+    /// - If a refresh is already in progress it will be replaced, maintaining any pending `authorizationHeaderValue()`
+    ///   calls (i.e., any calls waiting on an expired token refresh will receive the result of the new `authenticate()` work).
+    /// - If another `authenticate()` call replaces this one, the awaiting caller will receive the replacing call's result,
     ///   not their own work's result.
+    /// - Cancelling a task that calls `authenticate()` will result in _all_ callers awaiting a fresh token to receive a
+    ///   cancellation error.
     ///
-    /// `refresh()` waits for `work` to finish.
+    /// `authenticate()` waits for `work` to finish.
     ///
     /// This can be used, for example, to manually log a user in, or retrieve tokens from storage.
     /// ```swift
@@ -126,18 +128,18 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     /// )
     ///
     /// // by logging in
-    /// try await sharedOidcAuth.refresh {
+    /// try await sharedOidcAuth.authenticate {
     ///     return sharedOidcService.login(username, password)
     /// }
     ///
     /// // or by retrieving from some kind of storage:
-    /// try await sharedOidcAuth.refresh {
+    /// try await sharedOidcAuth.authenticate {
     ///     return try await KeychainHelper.shared.retrieve(...)
     /// }
     /// ```
     ///
     /// - Parameter work: A closure that returns a new `Token`.
-    public func refresh(using work: @escaping @Sendable () async throws -> Token) async throws {
+    public func authenticate(using work: @escaping @Sendable () async throws -> Token) async throws {
         let token = state.token
         let id = UUID()
         return try await withTaskCancellationHandler {
@@ -147,16 +149,14 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
             }
         } onCancel: {
             Task {
-                if let waiter = await removeWaiter(id: id) {
-                    waiter.resume(.failure(CancellationError()))
-                }
+                await reset()
             }
         }
     }
     
     /// Set the current token to a known value.
     ///
-    /// - Cancels any pending refresh tasks - either manual calls to `refresh()` or background token refreshes.
+    /// - Cancels any pending refresh tasks - either manual calls to `authenticate()` or background token refreshes.
     /// - All pending and future calls to `authorizationHeaderValue()` will receive a value based on the new token.
     ///
     /// - Parameter token: The new `Token`.
