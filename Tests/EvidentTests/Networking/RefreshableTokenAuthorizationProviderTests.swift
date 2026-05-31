@@ -371,6 +371,73 @@ struct RefreshableTokenAuthorizationProviderTests {
         #expect(value == "NEW")
     }
 
+    /// Cancelling the Task that called `authenticate()` must reset the provider, so that:
+    /// - the authenticate caller fails,
+    /// - all queued `authorize()` waiters also fail,
+    /// - the underlying refresh work is cancelled (its belated result is discarded), and
+    /// - the provider is left in an invalid state.
+    @Test func cancellingAuthenticateInvalidatesProviderAndAllWaiters() async throws {
+        // given (start with an expired token so concurrent authorize() calls queue as waiters)
+        await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
+
+        // when (start authenticate in a cancellable task, held pending via the service continuation)
+        let placeholder = MyToken(authorizationHeaderValue: "OLD", isExpired: true)
+        let authenticateTask = Task {
+            try await provider.authenticate {
+                try await self.service.refresh(placeholder)
+            }
+        }
+
+        // then (authenticate is in flight)
+        let serviceContinuation = try await eventually { await service.continuation }
+
+        // when (many concurrent authorize() calls pile up as waiters)
+        let iterations = 50
+        async let authResults = withThrowingTaskGroup(of: String?.self, returning: [Result<String?, Error>].self) { group in
+            for _ in 0..<iterations {
+                group.addTask {
+                    try await provider.authorize(mockRequest).authorizationHeaderValue
+                }
+            }
+            var values = [Result<String?, Error>]()
+            while true {
+                do {
+                    let value = try await group.next()
+                    guard let value else { break }
+                    values.append(.success(value))
+                }
+                catch {
+                    values.append(.failure(error))
+                }
+            }
+            return values
+        }
+
+        // (give time for authorize calls to land on the actor and queue as waiters)
+        try await Task.sleep(for: .milliseconds(50))
+
+        // when (cancel the authenticate task — onCancel resets the provider)
+        authenticateTask.cancel()
+
+        // then (the authenticate caller fails — the reset resumed its continuation with NotAuthorized)
+        await #expect(throws: NotAuthorized.self) {
+            try await authenticateTask.value
+        }
+
+        // then (every queued authorize() waiter also failed via the reset)
+        let values = await authResults
+        #expect(values.count == iterations)
+        #expect(values.allSatisfy { $0.error is NotAuthorized })
+
+        // when (the underlying refresh's work belatedly completes — its result must NOT revive the provider)
+        serviceContinuation.resume(returning: MyToken(authorizationHeaderValue: "BELATED", isExpired: false))
+
+        // then (the provider remains invalid; the late result was discarded)
+        await #expect(throws: NotAuthorized.self) {
+            try await provider.authorize(mockRequest)
+        }
+    }
+
     /// A call to `authenticate()` whose work throws must propagate the error to the caller.
     @Test func authenticateThrowsWhenWorkThrows() async throws {
         // when / then
