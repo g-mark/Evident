@@ -70,9 +70,18 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
             throw error
         
         case .valid(let token) where token.isExpired:
-            return try await withCheckedThrowingContinuation { continuation in
-                startRefreshing(.opportunistic, token: token, using: { try await self.service.refresh(token) })
-                addRefreshWaiter(continuation, for: request)
+            let id = UUID()
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    startRefreshing(.opportunistic, token: token, using: { try await self.service.refresh(token) })
+                    addRefreshWaiter(continuation, id: id, for: request)
+                }
+            } onCancel: {
+                Task {
+                    if let waiter = await removeWaiter(id: id) {
+                        waiter.resume(.failure(CancellationError()))
+                    }
+                }
             }
         
         case .valid(let token):
@@ -130,9 +139,18 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     /// - Parameter work: A closure that returns a new `Token`.
     public func refresh(using work: @escaping @Sendable () async throws -> Token) async throws {
         let token = state.token
-        return try await withCheckedThrowingContinuation { continuation in
-            startRefreshing(.exclusive, token: token, using: work)
-            addRefreshWaiter(continuation) { _ in }
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                startRefreshing(.exclusive, token: token, using: work)
+                addRefreshWaiter(continuation, id: id) { _ in }
+            }
+        } onCancel: {
+            Task {
+                if let waiter = await removeWaiter(id: id) {
+                    waiter.resume(.failure(CancellationError()))
+                }
+            }
         }
     }
     
@@ -221,14 +239,16 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     }
     
     /// Represents a call to `authorize(_:)` that is awaiting a token refresh.
-    private struct Waiter: Hashable {
-        let id: UUID = UUID()
-        let resume: (Result<Token, Error>) -> Void
+    private struct Waiter: Hashable, Sendable {
+        let id: UUID
+        let resume: @Sendable (Result<Token, Error>) -> Void
 
         init<T: Sendable>(
             _ continuation: CheckedContinuation<T, Error>,
-            mapping: @escaping (Token) -> T
+            id: UUID = UUID(),
+            mapping: @Sendable @escaping (Token) -> T
         ) {
+            self.id = id
             resume = { result in
                 continuation.resume(with: result.map(mapping))
             }
@@ -244,8 +264,12 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     }
 
     /// Adds the `continuation` to the current `refreshing` list of waiters.
-    private func addRefreshWaiter(_ continuation: Continuation, for request: URLRequest) {
-        addRefreshWaiter(continuation) {
+    private func addRefreshWaiter(
+        _ continuation: Continuation,
+        id: UUID = UUID(),
+        for request: URLRequest
+    ) {
+        addRefreshWaiter(continuation, id: id) {
             request.withAuthorization(token: $0)
         }
     }
@@ -253,14 +277,27 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
     /// Adds the `continuation` to the current `refreshing` list of waiters.
     private func addRefreshWaiter<T: Sendable>(
         _ continuation: CheckedContinuation<T, Error>,
-        mapping: @escaping (Token) -> T
+        id: UUID = UUID(),
+        mapping: @Sendable @escaping (Token) -> T
     ) {
         guard case let .refreshing(token, task, waiters, priority) = self.state else {
             continuation.resume(throwing: InternalError("addRefreshWaiter while not refreshing"))
             return
         }
-        let waiter = Waiter(continuation, mapping: mapping)
+        let waiter = Waiter(continuation, id: id, mapping: mapping)
         changeState(to: .refreshing(token, task, waiters.inserting(waiter), priority))
+    }
+
+    private func removeWaiter(id: UUID) -> Waiter? {
+        guard case let .refreshing(token, task, waiters, priority) = self.state,
+              let index = waiters.firstIndex(where: { $0.id == id }) else {
+            return nil
+        }
+
+        var updated = waiters
+        let waiter = updated.remove(at: index)
+        changeState(to: .refreshing(token, task, updated, priority))
+        return waiter
     }
 
     /// Starts the process of refreshing a token.
@@ -271,6 +308,12 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
         token: Token?,
         using work: @escaping @Sendable () async throws -> Token
     ) {
+        var waiters: Set<Waiter> = []
+        if case let .refreshing(_, _, inFlightWaiters, _) = state {
+            waiters = inFlightWaiters
+        }
+
+        // An in-flight exclusive refresh is not preempted by an incoming opportunistic refresh.
         if atPriority == .opportunistic,
            case let .refreshing(_, _, _, priority) = state,
            priority == .exclusive {
@@ -290,7 +333,7 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
             }
         }
         
-        self.changeState(to: .refreshing(token, task, [], atPriority))
+        self.changeState(to: .refreshing(token, task, waiters, atPriority))
     }
     
     /// Changes the current `state` to the specified value.
@@ -313,13 +356,13 @@ where TokenService: RefreshableTokenService, TokenService.Token == Token {
             oldWaiters.forEach { $0.resume(.success(token)) }
             state = newState
             
-        case (let .refreshing(_, oldTask, oldWaiters, _),
+        case (let .refreshing(_, oldTask, _, _),
               let .refreshing(token, newTask, newWaiters, newPriority)):
             // Note: blocking an `exclusive` -> `opportunistic` change is handled in `startRefreshing`.
             if oldTask != newTask {
                 oldTask.cancel()
             }
-            state = .refreshing(token, newTask, oldWaiters.union(newWaiters), newPriority)
+            state = .refreshing(token, newTask, newWaiters, newPriority)
         }
         
         switch newState {

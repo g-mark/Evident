@@ -337,6 +337,40 @@ struct RefreshableTokenAuthorizationProviderTests {
         #expect(values.count == iterations)
     }
 
+    /// Cancelling the Task that called `authorize()` while a token refresh is in flight must:
+    /// - resume the calling task immediately with a `CancellationError`, and
+    /// - leave the underlying token refresh running so that subsequent calls see its result.
+    @Test func cancellingAuthorizeResumesBeforeRefreshFinishes() async throws {
+        // given (start with an expired token)
+        await provider.setToken(MyToken(authorizationHeaderValue: "OLD", isExpired: true))
+
+        // when (start an authorize call in a cancellable task)
+        let authorizeTask = Task {
+            try await provider.authorize(mockRequest)
+        }
+
+        // then (the refresh kicks off)
+        let continuation = try await eventually { await service.continuation }
+
+        // when (cancel the calling task — refresh is still in flight, continuation NOT yet resumed)
+        authorizeTask.cancel()
+
+        // then (the calling task resumes with CancellationError before the refresh finishes)
+        await #expect(throws: CancellationError.self) {
+            try await authorizeTask.value
+        }
+
+        // when (the underlying refresh — which kept running despite the caller's cancellation — completes)
+        continuation.resume(returning: MyToken(authorizationHeaderValue: "NEW", isExpired: false))
+
+        // then (a subsequent authorize() sees the refreshed token, proving the refresh ran to completion)
+        let value = try await eventually {
+            let headerValue = try await provider.authorize(mockRequest).authorizationHeaderValue
+            return headerValue == "NEW" ? headerValue : nil
+        }
+        #expect(value == "NEW")
+    }
+
     /// A manual `refresh()` whose work throws must propagate the error to the caller.
     @Test func refreshThrowsWhenWorkThrows() async throws {
         // when / then
@@ -428,5 +462,4 @@ struct RefreshableTokenAuthorizationProviderTests {
         let afterValue = try await provider.authorize(mockRequest).authorizationHeaderValue
         #expect(afterValue == "SECOND")
     }
-
 }
